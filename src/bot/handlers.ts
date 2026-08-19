@@ -1247,7 +1247,7 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
       `📊 **Mint Summary**\n\nContract: \`${shortenAddress(address)}\`\n✅ Success: ${result.totalSuccess}\n❌ Failed: ${result.totalFailed}\nTotal Attempts: ${result.results.length}`,
       {
         reply_markup: backToMainKeyboard(),
-        parse_Mode: "Markdown",
+        parse_mode: "Markdown",
       }
     );
   } catch (error) {
