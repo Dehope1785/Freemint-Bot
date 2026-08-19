@@ -22,6 +22,7 @@ import {
   fetchWalletPortfolio, 
   executeSell 
 } from "../core/portfolio.js";
+import { sweepDustToMaster } from "../core/sweeper.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -41,7 +42,7 @@ import {
   portfolioKeyboard,
 } from "./keyboards.js";
 
-// Session state for multi-step flows (import key, scan, mint)
+// Session state for multi-step flows
 interface SessionState {
   action: "import_key" | "scan" | "manual_mint" | "none";
   contractAddress?: string;
@@ -93,19 +94,13 @@ export async function helpCommand(ctx: Context) {
 /help — Show this help
 
 **Features:**
-• 💼 Manage multiple wallets (generate, import, toggle, delete)
-• 🖼 Portfolio — View your minted NFTs, floor prices, and instant-sell buttons
+• 💼 Manage multiple wallets (generate, import, toggle, delete, sweep)
+• 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets to Wallet 1
+• 🖼 Portfolio — View your minted NFTs, live floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
 • 👥 Watchlist — track contracts and mint with one tap
 • ⚡ Auto-Mint — automatically mint from watchlist contracts
 • 🚀 Manual Mint — mint from all active wallets at once
-• 📥 Paste a contract address or private key directly in chat
-
-**How it works:**
-1. Generate or import wallets
-2. Toggle wallets on (✅) or off (❌)
-3. Paste a contract address to scan it
-4. Mint across all active wallets simultaneously
 
 **Security:**
 • Private keys are encrypted with AES-256-GCM
@@ -182,6 +177,47 @@ export async function handleCallback(ctx: Context) {
     return;
   }
 
+  // Sweep ETH dust
+  if (data === "sweep_dust") {
+    clearSession(telegramId);
+    const wallets = await getWallets(telegramId);
+    if (wallets.length < 2) {
+      await ctx.reply("❌ You need at least 2 wallets to consolidate funds.", {
+        reply_markup: backToWalletsKeyboard(),
+      });
+      return;
+    }
+
+    const masterWallet = wallets[0].address;
+    await ctx.reply(`🧹 *Consolidating all wallet balances into ${wallets[0].label} (\`${shortenAddress(masterWallet)}\`)...*`, {
+      parse_mode: "Markdown",
+    });
+
+    try {
+      const sweep = await sweepDustToMaster(telegramId, masterWallet);
+      let report = `✅ **Sweep Completed!**\n\n💰 **Total Collected:** \`${sweep.totalSweptEth.toFixed(6)} ETH\`\n📥 **Destination:** \`${shortenAddress(masterWallet)}\`\n\n`;
+
+      for (const res of sweep.results) {
+        if (res.txHash) {
+          report += `• **${res.walletLabel}**: Swept \`${res.sweptEth.toFixed(6)} ETH\` ([Tx](https://basescan.org/tx/${res.txHash}))\n`;
+        } else if (res.error && res.error !== "0 balance") {
+          report += `• **${res.walletLabel}**: Skipped (${res.error})\n`;
+        }
+      }
+
+      await ctx.reply(report, {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+        reply_markup: backToWalletsKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`❌ Sweep failed: ${errorMessage(err)}`, {
+        reply_markup: backToWalletsKeyboard(),
+      });
+    }
+    return;
+  }
+
   // New wallet
   if (data === "new_wallet") {
     clearSession(telegramId);
@@ -203,13 +239,7 @@ export async function handleCallback(ctx: Context) {
   if (data === "import_key") {
     setSession(telegramId, { action: "import_key" });
     await ctx.editMessageText(
-      `📥 **Import Wallet by Private Key**
-
-Please paste your private key directly in the chat.
-
-Format: 64 hex characters (with or without 0x prefix)
-
-⚠️ Your key will be encrypted with AES-256-GCM before storage.`,
+      `📥 **Import Wallet by Private Key**\n\nPlease paste your private key directly in the chat.\n\nFormat: 64 hex characters (with or without 0x prefix)\n\n⚠️ Your key will be encrypted with AES-256-GCM before storage.`,
       { parse_mode: "Markdown", reply_markup: backToMainKeyboard() }
     );
     return;
@@ -265,13 +295,7 @@ Format: 64 hex characters (with or without 0x prefix)
       const label = wallet?.label || "Unknown";
 
       await ctx.reply(
-        `🔑 **PRIVATE KEY**
-
-Wallet: ${label}
-Address: \`${wallet?.address || ""}\`
-Private Key: \`${privateKey}\`
-
-⚠️ Please delete this message manually after saving your key safely.`,
+        `🔑 **PRIVATE KEY**\n\nWallet: ${label}\nAddress: \`${wallet?.address || ""}\`\nPrivate Key: \`${privateKey}\`\n\n⚠️ Please delete this message manually after saving your key safely.`,
         { parse_mode: "Markdown" }
       );
 
@@ -290,9 +314,7 @@ Private Key: \`${privateKey}\`
   if (data === "scan_contract") {
     setSession(telegramId, { action: "scan" });
     await ctx.editMessageText(
-      `🔍 **Scan Contract**
-
-Please paste a contract address (0x...) directly in the chat to scan it for free-mint functions.`,
+      `🔍 **Scan Contract**\n\nPlease paste a contract address (0x...) directly in the chat to scan it for free-mint functions.`,
       { parse_mode: "Markdown", reply_markup: backToMainKeyboard() }
     );
     return;
@@ -323,9 +345,7 @@ Please paste a contract address (0x...) directly in the chat to scan it for free
   if (data === "manual_mint") {
     setSession(telegramId, { action: "manual_mint" });
     await ctx.editMessageText(
-      `🚀 **Manual Mint**
-
-Please paste a contract address (0x...) to mint from all your active (✅) wallets.`,
+      `🚀 **Manual Mint**\n\nPlease paste a contract address (0x...) to mint from all your active (✅) wallets.`,
       { parse_mode: "Markdown", reply_markup: backToMainKeyboard() }
     );
     return;
@@ -392,7 +412,6 @@ export async function handleText(ctx: Context) {
       await performScan(ctx, telegramId, normalizedAddr);
       return;
     }
-    // Default: scan the address
     clearSession(telegramId);
     await performScan(ctx, telegramId, normalizedAddr);
     return;
@@ -464,7 +483,6 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
         text += `    Floor: \`${floorDisplay}\` | Bid: \`${bidDisplay}\`\n`;
         text += `    🔗 [OpenSea](${item.openseaUrl})\n`;
 
-        // Add Instant Sell button for NFTs with bids or active floor
         sellButtons.push([
           { 
             text: `💰 Sell #${item.tokenId} (${item.topBidEth > 0 ? `${item.topBidEth} ETH` : "Dump"})`, 
