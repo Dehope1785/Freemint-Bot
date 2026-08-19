@@ -1,16 +1,9 @@
-import { 
-  type Address, 
-  type Hex, 
-  getAddress, 
-  parseAbi, 
-  createWalletClient, 
-  http 
-} from "viem";
-import { base } from "viem/chains";
+import { type Hex, createWalletClient, http, custom } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { base } from "viem/chains";
 import { getPublicClient } from "./chain.js";
 
-export interface NFTItem {
+export interface PortfolioItem {
   contractAddress: string;
   tokenId: string;
   collectionName: string;
@@ -20,172 +13,153 @@ export interface NFTItem {
 }
 
 export interface WalletPortfolio {
-  address: string;
+  walletAddress: string;
+  items: PortfolioItem[];
   totalNfts: number;
   totalFloorValueEth: number;
-  items: NFTItem[];
 }
 
-export interface SellQuote {
-  hasBid: boolean;
-  priceEth: number;
-  marketName: string;
-  orderId?: string;
-  routerAddress?: Address;
-  calldata?: Hex;
-  value?: bigint;
-}
-
-const APPROVAL_ABI = parseAbi([
-  "function setApprovalForAll(address operator, bool approved) external",
-  "function isApprovedForAll(address owner, address operator) external view returns (bool)"
-]);
-
-// Fetches all ERC-721 / ERC-1155 tokens held by a wallet on Base
 export async function fetchWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
-  const cleanAddr = getAddress(walletAddress);
-  const url = `https://api-base.reservoir.tools/users/${cleanAddr}/tokens/v7?limit=20`;
+  const items: PortfolioItem[] = [];
+  const normalizedAddr = walletAddress.toLowerCase();
 
   try {
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-    });
-    const data = (await res.json()) as any;
+    // 1. Fetch via Reservoir Base Indexer
+    const res = await fetch(
+      `https://api-base.reservoir.tools/users/${normalizedAddr}/tokens/v7?limit=20`,
+      {
+        headers: {
+          "Accept": "*/*",
+          "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
+        },
+      }
+    );
 
-    if (!data || !data.tokens) {
-      return { address: cleanAddr, totalNfts: 0, totalFloorValueEth: 0, items: [] };
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      if (data && Array.isArray(data.tokens)) {
+        for (const t of data.tokens) {
+          const token = t.token;
+          const market = t.market;
+          const floor = market?.floorAsk?.price?.amount?.native ?? 0;
+          const topBid = market?.topBid?.price?.amount?.native ?? 0;
+
+          items.push({
+            contractAddress: token.contract,
+            tokenId: token.tokenId,
+            collectionName: token.collection?.name || token.name || "Base NFT",
+            floorPriceEth: typeof floor === "number" ? floor : parseFloat(floor || "0"),
+            topBidEth: typeof topBid === "number" ? topBid : parseFloat(topBid || "0"),
+            openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
+          });
+        }
+      }
     }
-
-    const items: NFTItem[] = data.tokens.map((entry: any) => {
-      const token = entry.token;
-      const floor = token.collection?.floorAsk?.price?.amount?.native || 0;
-      const topBid = token.collection?.topBid?.price?.amount?.native || 0;
-
-      return {
-        contractAddress: token.contract,
-        tokenId: token.tokenId,
-        collectionName: token.collection?.name || "Unnamed NFT",
-        floorPriceEth: floor,
-        topBidEth: topBid,
-        openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
-      };
-    });
-
-    const totalFloorValueEth = items.reduce((acc, curr) => acc + curr.floorPriceEth, 0);
-
-    return {
-      address: cleanAddr,
-      totalNfts: items.length,
-      totalFloorValueEth,
-      items,
-    };
-  } catch (error) {
-    console.error(`Error fetching portfolio for ${walletAddress}:`, error);
-    return { address: cleanAddr, totalNfts: 0, totalFloorValueEth: 0, items: [] };
+  } catch (err) {
+    console.error("Portfolio Reservoir query error:", err);
   }
+
+  // 2. OpenSea Fallback if items empty
+  if (items.length === 0) {
+    try {
+      const osRes = await fetch(
+        `https://api.opensea.io/api/v2/chain/base/account/${normalizedAddr}/nfts?limit=20`,
+        {
+          headers: {
+            "Accept": "application/json",
+            "X-API-KEY": process.env.OPENSEA_API_KEY || "",
+          },
+        }
+      );
+
+      if (osRes.ok) {
+        const osData = (await osRes.json()) as any;
+        if (osData && Array.isArray(osData.nfts)) {
+          for (const nft of osData.nfts) {
+            items.push({
+              contractAddress: nft.contract,
+              tokenId: nft.identifier,
+              collectionName: nft.collection || nft.name || "Base NFT",
+              floorPriceEth: 0,
+              topBidEth: 0,
+              openseaUrl: nft.opensea_url || `https://opensea.io/assets/base/${nft.contract}/${nft.identifier}`,
+            });
+          }
+        }
+      }
+    } catch (osErr) {
+      console.error("Portfolio OpenSea query fallback error:", osErr);
+    }
+  }
+
+  const totalFloor = items.reduce((sum, i) => sum + i.floorPriceEth, 0);
+
+  return {
+    walletAddress,
+    items,
+    totalNfts: items.length,
+    totalFloorValueEth: totalFloor,
+  };
 }
 
-// Fetch the best instant-sell route for a specific NFT
-export async function getBestSellQuote(
-  contractAddress: string,
-  tokenId: string,
-  makerAddress: string
-): Promise<SellQuote> {
-  const cleanAddr = getAddress(contractAddress);
-  const cleanMaker = getAddress(makerAddress);
-
-  const url = `https://api-base.reservoir.tools/execute/sell/v7`;
-
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        token: `${cleanAddr}:${tokenId}`,
-        taker: cleanMaker,
-        exactAmount: 1
-      }),
-    });
-    const data = (await res.json()) as any;
-
-    if (!data.steps || data.steps.length === 0) {
-      return { hasBid: false, priceEth: 0, marketName: "None" };
-    }
-
-    const saleStep = data.steps.find((s: any) => s.id === "sale" || s.kind === "transaction");
-    if (!saleStep || !saleStep.items || saleStep.items.length === 0) {
-      return { hasBid: false, priceEth: 0, marketName: "None" };
-    }
-
-    const txItem = saleStep.items[0].data;
-    const priceEth = data.path?.[0]?.quote || 0;
-    const sourceName = data.path?.[0]?.source || "Secondary Market";
-
-    return {
-      hasBid: true,
-      priceEth,
-      marketName: sourceName,
-      routerAddress: getAddress(txItem.to),
-      calldata: txItem.data as Hex,
-      value: BigInt(txItem.value || 0),
-    };
-  } catch (error) {
-    console.error("Sell quote fetch error:", error);
-    return { hasBid: false, priceEth: 0, marketName: "None" };
-  }
-}
-
-// Execute the sell transaction on-chain
 export async function executeSell(
   privateKey: Hex,
   contractAddress: string,
   tokenId: string
-): Promise<{ success: boolean; txHash?: string; error?: string; payoutEth?: number }> {
-  const account = privateKeyToAccount(privateKey);
-  const publicClient = getPublicClient();
-
-  const walletClient = createWalletClient({
-    account,
-    chain: base,
-    transport: http(process.env.BASE_RPC_URL || "https://mainnet.base.org"),
-  });
-
+): Promise<{ success: boolean; payoutEth?: number; txHash?: string; error?: string }> {
   try {
-    const quote = await getBestSellQuote(contractAddress, tokenId, account.address);
-    if (!quote.hasBid || !quote.routerAddress || !quote.calldata) {
-      return { success: false, error: "No active bids available to fill for this NFT on secondary markets." };
-    }
-
-    // Check & submit setApprovalForAll if needed
-    const isApproved = await publicClient.readContract({
-      address: getAddress(contractAddress),
-      abi: APPROVAL_ABI,
-      functionName: "isApprovedForAll",
-      args: [account.address, quote.routerAddress],
+    const account = privateKeyToAccount(privateKey);
+    const client = createWalletClient({
+      account,
+      chain: base,
+      transport: http(),
     });
 
-    if (!isApproved) {
-      const approveTx = await walletClient.writeContract({
-        address: getAddress(contractAddress),
-        abi: APPROVAL_ABI,
-        functionName: "setApprovalForAll",
-        args: [quote.routerAddress, true],
-      });
-      await publicClient.waitForTransactionReceipt({ hash: approveTx });
-    }
-
-    // Execute the fill transaction
-    const txHash = await walletClient.sendTransaction({
-      to: quote.routerAddress,
-      data: quote.calldata,
-      value: quote.value || 0n,
+    const res = await fetch("https://api-base.reservoir.tools/execute/sell/v7", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
+      },
+      body: JSON.stringify({
+        token: `${contractAddress}:${tokenId}`,
+        taker: account.address,
+      }),
     });
 
-    await publicClient.waitForTransactionReceipt({ hash: txHash });
+    if (!res.ok) {
+      const errJson = (await res.json()) as any;
+      return {
+        success: false,
+        error: errJson?.message || "No active bids found on secondary markets",
+      };
+    }
 
-    return { success: true, txHash, payoutEth: quote.priceEth };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { success: false, error: message };
+    const data = (await res.json()) as any;
+    const step = data?.steps?.find((s: any) => s.items && s.items.length > 0);
+    const txData = step?.items?.[0]?.data;
+
+    if (!txData) {
+      return { success: false, error: "Unable to construct sell order route" };
+    }
+
+    const txHash = await client.sendTransaction({
+      to: txData.to,
+      data: txData.data,
+      value: BigInt(txData.value || "0"),
+    });
+
+    const payout = data?.path?.[0]?.buyIn?.amount?.native ?? 0;
+
+    return {
+      success: true,
+      payoutEth: payout,
+      txHash,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || String(err),
+    };
   }
 }
