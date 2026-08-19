@@ -45,6 +45,7 @@ import {
   setAutoMintEnabled,
   getAutoMintStatus,
 } from "../core/watchlist.js";
+import { fetchAllWalletsBalances } from "../core/walletBalance.js";
 import {
   mainMenuKeyboard,
   walletsKeyboard,
@@ -870,10 +871,23 @@ async function showWalletsScreen(ctx: Context, telegramId: bigint) {
     return;
   }
 
-  let text = `💼 **My Wallets**\n\n`;
+  // Fetch live ETH & USD balances for all wallets
+  const balances = await fetchAllWalletsBalances(wallets);
+
+  let text = `💼 **My Wallets & Gas Balances**\n`;
   text += `Total: ${wallets.length} | Active: ${wallets.filter((w) => w.isActive).length}\n\n`;
   text += `Click a wallet to toggle its active state:\n`;
-  text += `✅ = allowed to mint | ❌ = disabled\n`;
+  text += `✅ = allowed to mint | ❌ = disabled\n\n`;
+
+  wallets.forEach((w, index) => {
+    const bal = balances.find((b) => b.address.toLowerCase() === w.address.toLowerCase()) || {
+      ethBalance: "0.0000",
+      usdBalance: "0.00",
+    };
+    const statusIcon = w.isActive ? "✅" : "❌";
+    text += `${statusIcon} **W${index}**: \`${shortenAddress(w.address)}\`\n`;
+    text += `   💰 **$${bal.usdBalance}** | \`${bal.ethBalance} ETH\`\n\n`;
+  });
 
   await ctx.editMessageText(text, {
     reply_markup: walletsKeyboard(wallets),
@@ -1009,7 +1023,7 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
       `⚠️ **MINT ABORTED (HIGH GAS)**\n\n` +
       `Current Network Gas: \`${gasCheck.currentGwei.toFixed(4)} Gwei\`\n` +
       `Your Configured Max: \`${gasCheck.maxGwei} Gwei\`\n\n` +
-      `The bot paused this mint to prevent burning high gas fees. You can adjust your limit in **🛡 Settings / Gas**.`,
+      `The bot paused this mint to prevent burning high gas fees. You can adjust your limit in **🛡 Settings / Gas**`,
       {
         reply_markup: backToMainKeyboard(),
         parse_mode: "Markdown",
