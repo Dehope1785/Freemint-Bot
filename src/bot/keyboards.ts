@@ -13,6 +13,24 @@ export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
     .text(toggleText, toggleData).text("🛡 Settings / Gas", "settings");
 }
 
+export function settingsMenuKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🔢 Mint Multiplier (Quantity / Wallet)", "menu_mint_qty").row()
+    .text("⛽ Gas Price Ceiling Guard", "menu_gas_guard").row()
+    .text("📖 Full Help & Guide", "menu_help_text").row()
+    .text("🏠 Main Menu", "main_menu");
+}
+
+export function quantitySettingsKeyboard(currentQty: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(`${currentQty === 1 ? "✅ " : ""}1x Per Wallet`, "setqty_1")
+    .text(`${currentQty === 2 ? "✅ " : ""}2x Per Wallet`, "setqty_2").row()
+    .text(`${currentQty === 3 ? "✅ " : ""}3x Per Wallet`, "setqty_3")
+    .text(`${currentQty === 5 ? "✅ " : ""}5x Per Wallet`, "setqty_5").row()
+    .text(`${currentQty === 10 ? "✅ " : ""}10x Max Turbo`, "setqty_10").row()
+    .text("🔙 Settings", "settings").text("🏠 Main Menu", "main_menu");
+}
+
 export function gasSettingsKeyboard(currentMax: number): InlineKeyboard {
   return new InlineKeyboard()
     .text(`${currentMax === 0.02 ? "✅ " : ""}0.02 Gwei (Ultra Cheap)`, "setgas_0.02").row()
@@ -20,13 +38,6 @@ export function gasSettingsKeyboard(currentMax: number): InlineKeyboard {
     .text(`${currentMax === 0.10 ? "✅ " : ""}0.10 Gwei (Fast)`, "setgas_0.10").row()
     .text(`${currentMax === 0.25 ? "✅ " : ""}0.25 Gwei (Aggressive)`, "setgas_0.25").row()
     .text("🔙 Settings", "settings").text("🏠 Main Menu", "main_menu");
-}
-
-export function settingsMenuKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("⛽ Gas Price Ceiling Guard", "menu_gas_guard").row()
-    .text("📖 Full Help & Guide", "menu_help_text").row()
-    .text("🏠 Main Menu", "main_menu");
 }
 
 export function portfolioKeyboard(): InlineKeyboard {
