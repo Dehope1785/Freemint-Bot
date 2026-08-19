@@ -1,7 +1,8 @@
-import { type Hex, createWalletClient, http, custom } from "viem";
+import { type Hex, createWalletClient, http, parseAbi, createPublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { getPublicClient } from "./chain.js";
+import { prisma } from "../db/client.js";
 
 export interface PortfolioItem {
   contractAddress: string;
@@ -21,84 +22,90 @@ export interface WalletPortfolio {
 
 export async function fetchWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
   const items: PortfolioItem[] = [];
-  const normalizedAddr = walletAddress.toLowerCase();
+  const normalizedAddr = walletAddress.toLowerCase() as `0x${string}`;
+  const publicClient = getPublicClient();
 
   try {
-    // 1. Fetch via Reservoir Base Indexer
-    const res = await fetch(
-      `https://api-base.reservoir.tools/users/${normalizedAddr}/tokens/v7?limit=20`,
-      {
-        headers: {
-          "Accept": "*/*",
-          "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
-        },
-      }
-    );
+    // 1. Fetch recent minted contracts from database history for this wallet's user or global drops
+    const history = await prisma.mintHistory.findMany({
+      where: { status: "SUCCESS", txHash: { not: null } },
+      orderBy: { timestamp: "desc" },
+      take: 15,
+    });
 
-    if (res.ok) {
-      const data = (await res.json()) as any;
-      if (data && Array.isArray(data.tokens)) {
-        for (const t of data.tokens) {
-          const token = t.token;
-          const market = t.market;
-          const floor = market?.floorAsk?.price?.amount?.native ?? 0;
-          const topBid = market?.topBid?.price?.amount?.native ?? 0;
+    const uniqueContracts = Array.from(new Set(history.map((h) => h.contractAddress)));
 
+    // 2. Check on-chain balance and token ownership for each known contract
+    for (const contractAddr of uniqueContracts) {
+      try {
+        const cAddr = contractAddr as `0x${string}`;
+        
+        // Check balance of this NFT contract for this wallet
+        const balance = (await publicClient.readContract({
+          address: cAddr,
+          abi: parseAbi(["function balanceof(address owner) view returns (uint256)", "function balanceOf(address owner) view returns (uint256)"]),
+          functionName: "balanceOf",
+          args: [normalizedAddr],
+        }).catch(() => 0n)) as bigint;
+
+        if (balance && balance > 0n) {
+          // If wallet owns tokens here, look up recent tokenIds or scan first few IDs
           items.push({
-            contractAddress: token.contract,
-            tokenId: token.tokenId,
-            collectionName: token.collection?.name || token.name || "Base NFT",
-            floorPriceEth: typeof floor === "number" ? floor : parseFloat(floor || "0"),
-            topBidEth: typeof topBid === "number" ? topBid : parseFloat(topBid || "0"),
-            openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
+            contractAddress: cAddr,
+            tokenId: "Owned",
+            collectionName: `Contract ${cAddr.slice(0, 6)}...`,
+            floorPriceEth: 0,
+            topBidEth: 0,
+            openseaUrl: `https://opensea.io/assets/base/${cAddr}`,
           });
         }
+      } catch {
+        // Skip if contract doesn't standardly support balanceOf or fails
       }
     }
   } catch (err) {
-    console.error("Portfolio Reservoir query error:", err);
+    console.error("On-chain portfolio check error:", err);
   }
 
-  // 2. OpenSea Fallback if items empty
+  // Fallback to Reservoir if on-chain check returns nothing yet
   if (items.length === 0) {
     try {
-      const osRes = await fetch(
-        `https://api.opensea.io/api/v2/chain/base/account/${normalizedAddr}/nfts?limit=20`,
+      const res = await fetch(
+        `https://api-base.reservoir.tools/users/${normalizedAddr}/tokens/v7?limit=10`,
         {
           headers: {
-            "Accept": "application/json",
-            "X-API-KEY": process.env.OPENSEA_API_KEY || "",
+            "Accept": "*/*",
+            "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
           },
         }
       );
 
-      if (osRes.ok) {
-        const osData = (await osRes.json()) as any;
-        if (osData && Array.isArray(osData.nfts)) {
-          for (const nft of osData.nfts) {
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        if (data && Array.isArray(data.tokens)) {
+          for (const t of data.tokens) {
+            const token = t.token;
             items.push({
-              contractAddress: nft.contract,
-              tokenId: nft.identifier,
-              collectionName: nft.collection || nft.name || "Base NFT",
+              contractAddress: token.contract,
+              tokenId: token.tokenId,
+              collectionName: token.collection?.name || "Base NFT",
               floorPriceEth: 0,
               topBidEth: 0,
-              openseaUrl: nft.opensea_url || `https://opensea.io/assets/base/${nft.contract}/${nft.identifier}`,
+              openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
             });
           }
         }
       }
-    } catch (osErr) {
-      console.error("Portfolio OpenSea query fallback error:", osErr);
+    } catch (e) {
+      // Ignore reservoir fallback errors
     }
   }
-
-  const totalFloor = items.reduce((sum, i) => sum + i.floorPriceEth, 0);
 
   return {
     walletAddress,
     items,
     totalNfts: items.length,
-    totalFloorValueEth: totalFloor,
+    totalFloorValueEth: 0,
   };
 }
 
@@ -128,11 +135,7 @@ export async function executeSell(
     });
 
     if (!res.ok) {
-      const errJson = (await res.json()) as any;
-      return {
-        success: false,
-        error: errJson?.message || "No active bids found on secondary markets",
-      };
+      return { success: false, error: "No active bids found on secondary markets" };
     }
 
     const data = (await res.json()) as any;
@@ -149,17 +152,8 @@ export async function executeSell(
       value: BigInt(txData.value || "0"),
     });
 
-    const payout = data?.path?.[0]?.buyIn?.amount?.native ?? 0;
-
-    return {
-      success: true,
-      payoutEth: payout,
-      txHash,
-    };
+    return { success: true, payoutEth: 0, txHash };
   } catch (err: any) {
-    return {
-      success: false,
-      error: err?.message || String(err),
-    };
+    return { success: false, error: err?.message || String(err) };
   }
 }
