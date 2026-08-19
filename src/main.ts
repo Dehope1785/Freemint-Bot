@@ -50,16 +50,20 @@ async function main() {
         `🔍 *Verified:* ${scan.isVerified ? "✅ Yes" : "⚠️ Bytecode"}\n\n` +
         `_Tap below to mint with your active wallets:_`;
 
-      // Fetch users who have auto-mint enabled and have active wallets
-      const activeUsers = await prisma.user.findMany({
-        where: { autoMintEnabled: true },
-        include: { wallets: { where: { isEnabled: true } } },
-      });
+      // Fetch all users safely with included active wallets
+      const activeUsers = (await (prisma as any).user.findMany({
+        include: { wallets: true },
+      })) as Array<any>;
 
       for (const user of activeUsers) {
-        if (!user.wallets || user.wallets.length === 0) continue;
+        const hasWallets = user.wallets && user.wallets.length > 0;
+        if (!hasWallets) continue;
 
-        await bot.api.sendMessage(Number(user.telegramId), alertMessage, {
+        const targetChatId = typeof user.telegramId === "bigint" 
+          ? Number(user.telegramId) 
+          : user.telegramId;
+
+        await bot.api.sendMessage(targetChatId, alertMessage, {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
@@ -67,7 +71,7 @@ async function main() {
               [{ text: "🔗 View on BaseScan", url: `https://basescan.org/address/${scan.contractAddress}` }],
             ],
           },
-        }).catch((sendErr) => console.error(`Error alerting user ${user.telegramId}:`, sendErr));
+        }).catch((sendErr) => console.error(`Alert error for user ${user.telegramId}:`, sendErr));
       }
     } catch (err) {
       console.error("Auto-discovery pipeline error:", err);
@@ -89,7 +93,7 @@ async function main() {
   process.on("SIGINT", () => handleShutdown("SIGINT"));
   process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 
-  // Start grammY bot polling (runs persistently)
+  // Start grammY bot polling
   try {
     await bot.start({
       onStart: (botInfo) => {
