@@ -8,9 +8,42 @@ export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
 
   return new InlineKeyboard()
     .text("💼 My Wallets", "wallets").text("➕ New Wallet", "new_wallet").row()
-    .text("🖼 My Portfolio", "portfolio").text("🔍 Scan Contract", "scan_contract").row()
-    .text("👁 Watchlist", "watchlist").text("🚀 Manual Mint", "manual_mint").row()
-    .text(toggleText, toggleData).text("🛡 Settings / Gas", "settings");
+    .text("🎯 Tracking", "menu_tracking").text("🖼 My Portfolio", "portfolio").row()
+    .text("🔍 Scan Contract", "scan_contract").text("🚀 Manual Mint", "manual_mint").row()
+    .text("👁 Watchlist", "watchlist").text("🛡 Settings / Gas", "settings").row()
+    .text(toggleText, toggleData);
+}
+
+export function trackingMenuKeyboard(autoCopy: boolean, maxSpend: number, trackedCount: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(`🤖 Auto-Copy: ${autoCopy ? "✅ ON" : "❌ OFF"}`, "toggle_autocopy").row()
+    .text(`💵 Max Spend: ${maxSpend === 0 ? "Free Mints Only" : `${maxSpend} ETH`}`, "menu_max_spend").row()
+    .text(`📋 View Tracked Wallets (${trackedCount})`, "list_tracked_wallets").row()
+    .text("➕ Add Tracked Wallet", "add_tracked_prompt").row()
+    .text("🏠 Main Menu", "main_menu");
+}
+
+export function trackedWalletsListKeyboard(wallets: Array<{ id: string; address: string; label: string | null }>): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  for (const w of wallets) {
+    const labelText = w.label ? `${w.label} (${w.address.slice(0, 6)}...)` : `${w.address.slice(0, 6)}...${w.address.slice(-4)}`;
+    kb.text(`❌ Remove ${labelText}`, `del_tracked_${w.address}`).row();
+  }
+
+  kb.text("🔙 Back to Tracking", "menu_tracking").row()
+    .text("🏠 Main Menu", "main_menu");
+
+  return kb;
+}
+
+export function maxSpendSettingsKeyboard(currentMax: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(`${currentMax === 0 ? "✅ " : ""}Free Mints Only (0.00 ETH)`, "setspend_0").row()
+    .text(`${currentMax === 0.0005 ? "✅ " : ""}0.0005 ETH (~$1.00)`, "setspend_0.0005").row()
+    .text(`${currentMax === 0.001 ? "✅ " : ""}0.0010 ETH (~$2.00)`, "setspend_0.001").row()
+    .text(`${currentMax === 0.0025 ? "✅ " : ""}0.0025 ETH (~$5.00)`, "setspend_0.0025").row()
+    .text("🔙 Tracking Menu", "menu_tracking").text("🏠 Main Menu", "main_menu");
 }
 
 export function settingsMenuKeyboard(): InlineKeyboard {
