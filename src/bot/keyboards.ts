@@ -10,7 +10,23 @@ export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
     .text("💼 My Wallets", "wallets").text("➕ New Wallet", "new_wallet").row()
     .text("🖼 My Portfolio", "portfolio").text("🔍 Scan Contract", "scan_contract").row()
     .text("👁 Watchlist", "watchlist").text("🚀 Manual Mint", "manual_mint").row()
-    .text(toggleText, toggleData).text("🛡 Settings / Help", "settings");
+    .text(toggleText, toggleData).text("🛡 Settings / Gas", "settings");
+}
+
+export function gasSettingsKeyboard(currentMax: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(`${currentMax === 0.02 ? "✅ " : ""}0.02 Gwei (Ultra Cheap)`, "setgas_0.02").row()
+    .text(`${currentMax === 0.05 ? "✅ " : ""}0.05 Gwei (Recommended)`, "setgas_0.05").row()
+    .text(`${currentMax === 0.10 ? "✅ " : ""}0.10 Gwei (Fast)`, "setgas_0.10").row()
+    .text(`${currentMax === 0.25 ? "✅ " : ""}0.25 Gwei (Aggressive)`, "setgas_0.25").row()
+    .text("🔙 Settings", "settings").text("🏠 Main Menu", "main_menu");
+}
+
+export function settingsMenuKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("⛽ Gas Price Ceiling Guard", "menu_gas_guard").row()
+    .text("📖 Full Help & Guide", "menu_help_text").row()
+    .text("🏠 Main Menu", "main_menu");
 }
 
 export function portfolioKeyboard(): InlineKeyboard {
