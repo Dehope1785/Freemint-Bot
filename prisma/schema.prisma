@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  telegramId      BigInt   @id
+  autoMintEnabled Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  wallets      Wallet[]
+  mintHistory  MintHistory[]
+  watchlist    Watchlist[]
+}
+
+model Wallet {
+  id                  String   @id @default(cuid())
+  userId              BigInt
+  address             String
+  encryptedPrivateKey String
+  isActive            Boolean  @default(true)
+  label               String   @default("")
+  createdAt           DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [telegramId], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model MintHistory {
+  id              String   @id @default(cuid())
+  userId          BigInt
+  contractAddress String
+  txHash          String?
+  status          String
+  timestamp       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [telegramId], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Watchlist {
+  id              String   @id @default(cuid())
+  userId          BigInt
+  contractAddress String
+  addedAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [telegramId], onDelete: Cascade)
+
+  @@unique([userId, contractAddress])
+  @@index([userId])
+}

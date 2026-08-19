@@ -1,0 +1,140 @@
+import { InlineKeyboard } from "grammy";
+import { shortenAddress } from "../core/chain.js";
+import type { WalletInfo } from "../core/wallet.js";
+
+export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
+  const toggleText = autoMintEnabled ? "⚡ Auto-Mint: ON" : "⚡ Auto-Mint: OFF";
+  const toggleData = autoMintEnabled ? "auto_off" : "auto_on";
+
+  return new InlineKeyboard()
+    .text("💼 My Wallets", "wallets").text("➕ New Wallet", "new_wallet").row()
+    .text("🔍 Scan Contract", "scan_contract").text("👁 Watchlist", "watchlist").row()
+    .text(toggleText, toggleData).text("🚀 Manual Mint", "manual_mint").row()
+    .text("🛡 Settings / Help", "settings");
+}
+
+export function walletsKeyboard(wallets: WalletInfo[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  // List wallets in pairs
+  for (let i = 0; i < wallets.length; i += 2) {
+    const w1 = wallets[i];
+    const w2 = wallets[i + 1];
+
+    const w1Text = `${w1.isActive ? "✅" : "❌"} ${w1.label}: ${shortenAddress(w1.address)}`;
+    kb.text(w1Text, `toggle_${w1.id}`);
+
+    if (w2) {
+      const w2Text = `${w2.isActive ? "✅" : "❌"} ${w2.label}: ${shortenAddress(w2.address)}`;
+      kb.text(w2Text, `toggle_${w2.id}`);
+    }
+    kb.row();
+  }
+
+  // Sub-buttons
+  kb.text("➕ Generate New", "new_wallet").row()
+    .text("📥 Import Key", "import_key").row()
+    .text("🔑 Export Keys", "export_keys").row()
+    .text("🗑 Delete Wallet", "delete_wallet").row()
+    .text("🏠 Main Menu", "main_menu");
+
+  return kb;
+}
+
+export function deleteWalletKeyboard(wallets: WalletInfo[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  for (let i = 0; i < wallets.length; i += 2) {
+    const w1 = wallets[i];
+    const w2 = wallets[i + 1];
+
+    kb.text(`🗑 ${w1.label}: ${shortenAddress(w1.address)}`, `del_${w1.id}`);
+
+    if (w2) {
+      kb.text(`🗑 ${w2.label}: ${shortenAddress(w2.address)}`, `del_${w2.id}`);
+    }
+    kb.row();
+  }
+
+  kb.text("🔙 Back to Wallets", "wallets").row()
+    .text("🏠 Main Menu", "main_menu");
+
+  return kb;
+}
+
+export function exportWalletsKeyboard(wallets: WalletInfo[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  for (const w of wallets) {
+    kb.text(`🔑 ${w.label}: ${shortenAddress(w.address)}`, `export_${w.id}`).row();
+  }
+
+  kb.text("🔙 Back to Wallets", "wallets").row()
+    .text("🏠 Main Menu", "main_menu");
+
+  return kb;
+}
+
+export function watchlistKeyboard(contracts: string[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  for (let i = 0; i < contracts.length; i += 2) {
+    const c1 = contracts[i];
+    const c2 = contracts[i + 1];
+
+    kb.text(`🔍 ${shortenAddress(c1, 4, 4)}`, `scan_${c1}`);
+
+    if (c2) {
+      kb.text(`🔍 ${shortenAddress(c2, 4, 4)}`, `scan_${c2}`);
+    }
+    kb.row();
+  }
+
+  for (let i = 0; i < contracts.length; i += 2) {
+    const c1 = contracts[i];
+    const c2 = contracts[i + 1];
+
+    kb.text(`🚀 Mint ${shortenAddress(c1, 4, 4)}`, `mint_${c1}`);
+
+    if (c2) {
+      kb.text(`🚀 Mint ${shortenAddress(c2, 4, 4)}`, `mint_${c2}`);
+    }
+    kb.row();
+  }
+
+  for (let i = 0; i < contracts.length; i += 2) {
+    const c1 = contracts[i];
+    const c2 = contracts[i + 1];
+
+    kb.text(`❌ Remove ${shortenAddress(c1, 4, 4)}`, `rmwatch_${c1}`);
+
+    if (c2) {
+      kb.text(`❌ Remove ${shortenAddress(c2, 4, 4)}`, `rmwatch_${c2}`);
+    }
+    kb.row();
+  }
+
+  if (contracts.length === 0) {
+    kb.text("🏠 Main Menu", "main_menu");
+  } else {
+    kb.text("🏠 Main Menu", "main_menu");
+  }
+
+  return kb;
+}
+
+export function confirmMintKeyboard(contractAddress: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✅ Confirm Mint", `confirm_mint_${contractAddress}`).row()
+    .text("❌ Cancel", "main_menu");
+}
+
+export function backToMainKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text("🏠 Main Menu", "main_menu");
+}
+
+export function backToWalletsKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🔙 Wallets", "wallets").row()
+    .text("🏠 Main Menu", "main_menu");
+}
