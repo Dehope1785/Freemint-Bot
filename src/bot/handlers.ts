@@ -47,6 +47,13 @@ import {
 } from "../core/watchlist.js";
 import { fetchAllWalletsBalances } from "../core/walletBalance.js";
 import {
+  addTrackedWallet,
+  removeTrackedWallet,
+  getTrackedWallets,
+  getSniperConfig,
+  setSniperConfig,
+} from "../core/sniperEngine.js";
+import {
   mainMenuKeyboard,
   walletsKeyboard,
   deleteWalletKeyboard,
@@ -61,10 +68,13 @@ import {
   gasSettingsKeyboard,
   quantitySettingsKeyboard,
   autoSellSettingsKeyboard,
+  trackingMenuKeyboard,
+  trackedWalletsListKeyboard,
+  maxSpendSettingsKeyboard,
 } from "./keyboards.js";
 
 interface SessionState {
-  action: "import_key" | "scan" | "manual_mint" | "fund_custom" | "none";
+  action: "import_key" | "scan" | "manual_mint" | "fund_custom" | "add_tracked" | "none";
   contractAddress?: string;
 }
 
@@ -115,6 +125,7 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
+• 🎯 Whale Tracking & Copy-Mint — Mirror trades and mints from tracked addresses
 • 💰 Auto-Sell — Automatically fills open bids when targets are reached
 • 🛡 Security Scanner — Automatic honeypot & drainer detection
 • 🔢 Mint Multiplier — Set 1x to 10x mints per wallet per drop
@@ -124,12 +135,6 @@ export async function helpCommand(ctx: Context) {
 • 📦 Sweep NFTs — Consolidate all minted NFTs into Wallet 1
 • 🖼 Portfolio — View your minted NFTs, live floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
-• ⚡ Auto-Mint — automatically detect and batch-mint drops on Base
-
-**Security:**
-• Private keys are encrypted with AES-256-GCM
-• Exported keys are sent securely
-• Only you can access your wallets
 
 **Chain:** Base (Chain ID: 8453)`;
 
@@ -151,6 +156,134 @@ export async function handleCallback(ctx: Context) {
     clearSession(telegramId);
     await ctx.editMessageText(MAIN_MENU_TEXT, {
       reply_markup: mainMenuKeyboard(await getAutoMintStatus(telegramId)),
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  // Tracking / Copy-Mint menu
+  if (data === "menu_tracking") {
+    clearSession(telegramId);
+    const config = await getSniperConfig(telegramId);
+    const tracked = await getTrackedWallets(telegramId);
+    await ctx.editMessageText(
+      `🎯 **Whale Tracking & Copy-Mint Sniper**\n\n` +
+      `Status: **${config.autoCopy ? "✅ Active" : "❌ Disabled"}**\n` +
+      `Max Spend Filter: **${config.maxSpendEth === 0 ? "Free Mints Only" : `${config.maxSpendEth} ETH`}**\n` +
+      `Tracked Wallets: **${tracked.length} address(es)**\n\n` +
+      `When active, any NFT mint or buy executed by your tracked wallets will be automatically mirrored.`,
+      {
+        reply_markup: trackingMenuKeyboard(config.autoCopy, config.maxSpendEth, tracked.length),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Toggle auto-copy status
+  if (data === "toggle_autocopy") {
+    const config = await getSniperConfig(telegramId);
+    const newStatus = !config.autoCopy;
+    await setSniperConfig(telegramId, newStatus, config.maxSpendEth);
+    const tracked = await getTrackedWallets(telegramId);
+    await ctx.editMessageText(
+      `🎯 **Whale Tracking & Copy-Mint Sniper**\n\n` +
+      `Status: **${newStatus ? "✅ Active" : "❌ Disabled"}**\n` +
+      `Max Spend Filter: **${config.maxSpendEth === 0 ? "Free Mints Only" : `${config.maxSpendEth} ETH`}**\n` +
+      `Tracked Wallets: **${tracked.length} address(es)**\n\n` +
+      `When active, any NFT mint or buy executed by your tracked wallets will be automatically mirrored.`,
+      {
+        reply_markup: trackingMenuKeyboard(newStatus, config.maxSpendEth, tracked.length),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Max spend menu
+  if (data === "menu_max_spend") {
+    clearSession(telegramId);
+    const config = await getSniperConfig(telegramId);
+    await ctx.editMessageText(
+      `💵 **Max Spend per Mint / Buy**\n\nChoose the maximum amount of ETH your sub-wallets are allowed to spend when copying a tracked trade:`,
+      {
+        reply_markup: maxSpendSettingsKeyboard(config.maxSpendEth),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Set max spend value
+  if (data.startsWith("setspend_")) {
+    const val = parseFloat(data.slice(9));
+    const config = await getSniperConfig(telegramId);
+    await setSniperConfig(telegramId, config.autoCopy, val);
+    const tracked = await getTrackedWallets(telegramId);
+    await ctx.editMessageText(
+      `✅ Max spend updated to **${val === 0 ? "Free Mints Only" : `${val} ETH`}**!`,
+      {
+        reply_markup: trackingMenuKeyboard(config.autoCopy, val, tracked.length),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Prompt to add tracked wallet
+  if (data === "add_tracked_prompt") {
+    setSession(telegramId, { action: "add_tracked" });
+    await ctx.editMessageText(
+      `➕ **Add Tracked Wallet**\n\nPlease send the wallet address (0x...) of the whale or smart trader you want to track, optionally followed by a label.\n\nExample: \`0x123...abc Smart Whale\``,
+      {
+        reply_markup: new InlineKeyboard().text("🔙 Back", "menu_tracking"),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // List tracked wallets
+  if (data === "list_tracked_wallets") {
+    clearSession(telegramId);
+    const tracked = await getTrackedWallets(telegramId);
+    if (tracked.length === 0) {
+      await ctx.editMessageText(`📋 **Tracked Wallets**\n\nYou are not tracking any wallets yet.`, {
+        reply_markup: new InlineKeyboard().text("➕ Add Tracked Wallet", "add_tracked_prompt").row().text("🔙 Back", "menu_tracking"),
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    let text = `📋 **Your Tracked Wallets (${tracked.length})**\n\n`;
+    for (const tw of tracked) {
+      text += `• **${tw.label || "Whale"}**: \`${tw.address}\`\n`;
+    }
+
+    await ctx.editMessageText(text, {
+      reply_markup: trackedWalletsListKeyboard(tracked),
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  // Remove specific tracked wallet
+  if (data.startsWith("del_tracked_")) {
+    const address = data.slice(12);
+    await removeTrackedWallet(telegramId, address);
+    const tracked = await getTrackedWallets(telegramId);
+    
+    let text = `📋 **Your Tracked Wallets (${tracked.length})**\n\n`;
+    if (tracked.length === 0) {
+      text += `You are not tracking any wallets yet.`;
+    } else {
+      for (const tw of tracked) {
+        text += `• **${tw.label || "Whale"}**: \`${tw.address}\`\n`;
+      }
+    }
+
+    await ctx.editMessageText(text, {
+      reply_markup: trackedWalletsListKeyboard(tracked),
       parse_mode: "Markdown",
     });
     return;
@@ -679,6 +812,34 @@ export async function handleText(ctx: Context) {
   const text = ctx.message.text.trim();
   const session = getSession(telegramId);
 
+  // Handle adding tracked whale wallet via text input
+  if (session.action === "add_tracked") {
+    clearSession(telegramId);
+    const parts = text.split(/\s+/);
+    const address = parts[0];
+    const label = parts.slice(1).join(" ") || "Tracked Whale";
+
+    if (!isValidAddress(address)) {
+      await ctx.reply("❌ Invalid wallet address. Please enter a valid 0x address.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back", "menu_tracking"),
+      });
+      return;
+    }
+
+    await addTrackedWallet(telegramId, address, label);
+    const tracked = await getTrackedWallets(telegramId);
+    const config = await getSniperConfig(telegramId);
+
+    await ctx.reply(
+      `✅ **Successfully added tracked wallet!**\n\nAddress: \`${address}\`\nLabel: ${label}\n\nYour sniper is ready.`,
+      {
+        reply_markup: trackingMenuKeyboard(config.autoCopy, config.maxSpendEth, tracked.length),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
   // Handle custom gas funding input
   if (session.action === "fund_custom") {
     clearSession(telegramId);
@@ -871,7 +1032,6 @@ async function showWalletsScreen(ctx: Context, telegramId: bigint) {
     return;
   }
 
-  // Fetch live ETH & USD balances for all wallets
   const balances = await fetchAllWalletsBalances(wallets);
 
   let text = `💼 **My Wallets & Gas Balances**\n`;
@@ -1087,7 +1247,7 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
       `📊 **Mint Summary**\n\nContract: \`${shortenAddress(address)}\`\n✅ Success: ${result.totalSuccess}\n❌ Failed: ${result.totalFailed}\nTotal Attempts: ${result.results.length}`,
       {
         reply_markup: backToMainKeyboard(),
-        parse_mode: "Markdown",
+        parse_Mode: "Markdown",
       }
     );
   } catch (error) {
