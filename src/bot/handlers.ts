@@ -17,6 +17,7 @@ import {
 } from "../core/chain.js";
 import { scanContract } from "../core/scanner.js";
 import { batchMint } from "../core/mint.js";
+import { fetchWalletPortfolio } from "../core/portfolio.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -33,6 +34,7 @@ import {
   confirmMintKeyboard,
   backToMainKeyboard,
   backToWalletsKeyboard,
+  portfolioKeyboard,
 } from "./keyboards.js";
 
 // Session state for multi-step flows (import key, scan, mint)
@@ -88,6 +90,7 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
+• 🖼 Portfolio — View your minted NFTs, floor prices, and OpenSea links
 • 🔍 Scan any Base contract for free-mint functions
 • 👥 Watchlist — track contracts and mint with one tap
 • ⚡ Auto-Mint — automatically mint from watchlist contracts
@@ -127,6 +130,13 @@ export async function handleCallback(ctx: Context) {
       reply_markup: mainMenuKeyboard(await getAutoMintStatus(telegramId)),
       parse_mode: "Markdown",
     });
+    return;
+  }
+
+  // Portfolio screen
+  if (data === "portfolio") {
+    clearSession(telegramId);
+    await showPortfolioScreen(ctx, telegramId);
     return;
   }
 
@@ -219,30 +229,18 @@ Format: 64 hex characters (with or without 0x prefix)
       const wallet = wallets.find((w) => w.id === walletId);
       const label = wallet?.label || "Unknown";
 
-      // Send as a self-destruct message (5 seconds)
       await ctx.reply(
-        `🔑 **PRIVATE KEY — SELF-DESTRUCTING**
+        `🔑 **PRIVATE KEY**
 
 Wallet: ${label}
 Address: \`${wallet?.address || ""}\`
 Private Key: \`${privateKey}\`
 
-⏰ This message will self-destruct in 5 seconds. Save it now!`,
+⚠️ Please delete this message manually after saving your key safely.`,
         { parse_mode: "Markdown" }
       );
 
-      // Attempt to delete the message after 5 seconds
-      setTimeout(async () => {
-        try {
-          const lastMessages = await ctx.api.getChat(ctx.chat!.id);
-          // We can't easily get the message ID to delete here, so we rely on the user deleting it
-          // In a production bot, we'd track the message ID
-        } catch {
-          // Ignore deletion errors
-        }
-      }, 5000);
-
-      await ctx.reply("⚠️ Please delete the private key message above manually after saving it.", {
+      await ctx.reply("Saved your key? You can return to your wallets below:", {
         reply_markup: backToWalletsKeyboard(),
       });
     } catch (error) {
@@ -400,14 +398,74 @@ export async function handleText(ctx: Context) {
   await showMainMenu(ctx);
 }
 
+async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
+  const wallets = await getWallets(telegramId);
+
+  if (wallets.length === 0) {
+    const text = `🖼 **My Portfolio**\n\nNo wallets found. Generate or import a wallet first.`;
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(text, { reply_markup: backToMainKeyboard(), parse_mode: "Markdown" });
+    } else {
+      await ctx.reply(text, { reply_markup: backToMainKeyboard(), parse_mode: "Markdown" });
+    }
+    return;
+  }
+
+  let text = `📊 **Base NFT Portfolio & Valuation**\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+  let combinedFloorEth = 0;
+  let totalNftsHeld = 0;
+
+  for (let i = 0; i < wallets.length; i++) {
+    const w = wallets[i];
+    const portfolio = await fetchWalletPortfolio(w.address);
+    const shortAddr = shortenAddress(w.address);
+
+    text += `👛 **${w.label}** (\`${shortAddr}\`):\n`;
+    text += `📦 Holdings: ${portfolio.totalNfts} NFT(s)\n`;
+    text += `💎 Est. Floor Value: ${portfolio.totalFloorValueEth.toFixed(4)} ETH\n`;
+
+    if (portfolio.items.length > 0) {
+      for (const item of portfolio.items.slice(0, 4)) {
+        const floorDisplay = item.floorPriceEth > 0 ? `${item.floorPriceEth} ETH` : "Unlisted";
+        const bidDisplay = item.topBidEth > 0 ? `${item.topBidEth} ETH` : "None";
+        text += `  • **${item.collectionName}** (#${item.tokenId})\n`;
+        text += `    Floor: \`${floorDisplay}\` | Bid: \`${bidDisplay}\`\n`;
+        text += `    🔗 [View on OpenSea](${item.openseaUrl})\n`;
+      }
+    } else {
+      text += `  _No NFTs found in this wallet._\n`;
+    }
+    text += `\n`;
+
+    combinedFloorEth += portfolio.totalFloorValueEth;
+    totalNftsHeld += portfolio.totalNfts;
+  }
+
+  text += `━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `🏷 **Total NFTs Across Wallets:** ${totalNftsHeld}\n`;
+  text += `💰 **Combined Floor Value:** ${combinedFloorEth.toFixed(4)} ETH`;
+
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, {
+      reply_markup: portfolioKeyboard(),
+      parse_mode: "Markdown",
+      link_preview_options: { is_disabled: true },
+    });
+  } else {
+    await ctx.reply(text, {
+      reply_markup: portfolioKeyboard(),
+      parse_mode: "Markdown",
+      link_preview_options: { is_disabled: true },
+    });
+  }
+}
+
 async function showWalletsScreen(ctx: Context, telegramId: bigint) {
   const wallets = await getWallets(telegramId);
 
   if (wallets.length === 0) {
     await ctx.editMessageText(
-      `💼 **My Wallets**
-
-No wallets yet. Generate a new wallet or import an existing one.`,
+      `💼 **My Wallets**\n\nNo wallets yet. Generate a new wallet or import an existing one.`,
       {
         reply_markup: new InlineKeyboard()
           .text("➕ Generate New", "new_wallet").row()
@@ -441,9 +499,7 @@ async function showDeleteScreen(ctx: Context, telegramId: bigint) {
   }
 
   await ctx.editMessageText(
-    `🗑 **Delete Wallet**
-
-Click a wallet to permanently delete it. This cannot be undone!`,
+    `🗑 **Delete Wallet**\n\nClick a wallet to permanently delete it. This cannot be undone!`,
     {
       reply_markup: deleteWalletKeyboard(wallets),
       parse_mode: "Markdown",
@@ -462,11 +518,7 @@ async function showExportScreen(ctx: Context, telegramId: bigint) {
   }
 
   await ctx.editMessageText(
-    `🔑 **Export Keys**
-
-⚠️ **WARNING:** Exported keys will be shown in plain text. Save them immediately and delete the message.
-
-Click a wallet to reveal its private key:`,
+    `🔑 **Export Keys**\n\n⚠️ **WARNING:** Exported keys will be shown in plain text. Save them immediately and delete the message.\n\nClick a wallet to reveal its private key:`,
     {
       reply_markup: exportWalletsKeyboard(wallets),
       parse_mode: "Markdown",
@@ -527,7 +579,6 @@ async function performScan(ctx: Context, telegramId: bigint, address: string) {
       }
       text += `\n🚀 This contract has free mint functions!`;
 
-      // Add to watchlist and offer mint
       await addToWatchlist(telegramId, address);
 
       await ctx.reply(text, {
@@ -576,7 +627,6 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
       return;
     }
 
-    // Send status cards for each wallet
     for (const r of result.results) {
       const statusIcon = r.success ? "✅" : "❌";
       let card = `${statusIcon} **${r.label}** — ${r.success ? "Minted!" : "Failed"}\n`;
@@ -595,7 +645,6 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
       });
     }
 
-    // Summary
     await ctx.reply(
       `📊 **Mint Summary**\n\nContract: \`${shortenAddress(address)}\`\n✅ Success: ${result.totalSuccess}\n❌ Failed: ${result.totalFailed}\nTotal: ${result.results.length}`,
       {
