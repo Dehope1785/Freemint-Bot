@@ -1,4 +1,4 @@
-import { type Hex, parseAbi, type Address } from "viem";
+import { type Hex, createWalletClient, http, parseAbi, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { getPublicClient } from "./chain.js";
@@ -89,10 +89,7 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
   return {
     walletAddress,
     items,
-    totalNfts: items.reduce((acc, item) => {
-      // Extract count if stored in token string or default to 1 per item
-      return acc + 1;
-    }, 0),
+    totalNfts: items.length,
     totalFloorValueEth: 0,
   };
 }
