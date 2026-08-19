@@ -34,6 +34,10 @@ import {
   checkGasSafety, 
   setUserGasCeiling 
 } from "../core/gasGuard.js";
+import { 
+  getAutoSellConfig, 
+  setAutoSellConfig 
+} from "../core/autoSeller.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -55,6 +59,7 @@ import {
   settingsMenuKeyboard,
   gasSettingsKeyboard,
   quantitySettingsKeyboard,
+  autoSellSettingsKeyboard,
 } from "./keyboards.js";
 
 interface SessionState {
@@ -109,9 +114,10 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
+• 💰 Auto-Sell — Automatically fills open bids when targets are reached
 • 🛡 Security Scanner — Automatic honeypot & drainer detection
 • 🔢 Mint Multiplier — Set 1x to 10x mints per wallet per drop
-• ⛽ Gas Guard — Automatically blocks mints if Base L2 gas price surges
+• ⛽ Gas Guard — Automatically blocks mints if Base L2 gas surges
 • ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets
 • 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets back to Wallet 1
 • 📦 Sweep NFTs — Consolidate all minted NFTs into Wallet 1
@@ -153,9 +159,64 @@ export async function handleCallback(ctx: Context) {
   if (data === "settings") {
     clearSession(telegramId);
     await ctx.editMessageText(
-      `🛡 **Bot Settings & Controls**\n\nConfigure quantity multipliers, gas limits, and preferences:`,
+      `🛡 **Bot Settings & Controls**\n\nConfigure take-profit triggers, quantity multipliers, gas limits, and preferences:`,
       {
         reply_markup: settingsMenuKeyboard(),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Auto-sell settings menu
+  if (data === "menu_autosell") {
+    clearSession(telegramId);
+    const config = getAutoSellConfig(telegramId);
+    const ethPrice = await getEthUsdPrice();
+    await ctx.editMessageText(
+      `💰 **Auto-Sell / Take-Profit Router**\n\n` +
+      `Status: **${config.enabled ? "✅ Active" : "❌ Disabled"}**\n` +
+      `Minimum Payout Threshold: **${config.minPayoutEth} ETH (~$${(config.minPayoutEth * ethPrice).toFixed(2)})**\n\n` +
+      `When active, any minted NFT that receives an open market bid at or above this threshold is sold automatically into liquidity.\n\n` +
+      `Configure settings below:`,
+      {
+        reply_markup: autoSellSettingsKeyboard(config.enabled, config.minPayoutEth, ethPrice),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Toggle auto-sell status
+  if (data === "toggle_autosell") {
+    const current = getAutoSellConfig(telegramId);
+    const newStatus = !current.enabled;
+    setAutoSellConfig(telegramId, newStatus);
+    const ethPrice = await getEthUsdPrice();
+    await ctx.editMessageText(
+      `💰 **Auto-Sell / Take-Profit Router**\n\n` +
+      `Status: **${newStatus ? "✅ Active" : "❌ Disabled"}**\n` +
+      `Minimum Payout Threshold: **${current.minPayoutEth} ETH (~$${(current.minPayoutEth * ethPrice).toFixed(2)})**\n\n` +
+      `When active, any minted NFT that receives an open market bid at or above this threshold is sold automatically into liquidity.\n\n` +
+      `Configure settings below:`,
+      {
+        reply_markup: autoSellSettingsKeyboard(newStatus, current.minPayoutEth, ethPrice),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Set min auto-sell threshold
+  if (data.startsWith("set_as_")) {
+    const val = parseFloat(data.slice(7));
+    const current = getAutoSellConfig(telegramId);
+    setAutoSellConfig(telegramId, current.enabled, val);
+    const ethPrice = await getEthUsdPrice();
+    await ctx.editMessageText(
+      `✅ Auto-sell payout threshold set to **${val} ETH (~$${(val * ethPrice).toFixed(2)})**!`,
+      {
+        reply_markup: autoSellSettingsKeyboard(current.enabled, val, ethPrice),
         parse_mode: "Markdown",
       }
     );
@@ -287,7 +348,7 @@ export async function handleCallback(ctx: Context) {
     return;
   }
 
-  // Instant sell execution
+  // Instant sell execution (Panic Sell / Liquidate Now)
   if (data.startsWith("sell_")) {
     const parts = data.split("_");
     const contractAddr = parts[1];
@@ -310,7 +371,7 @@ export async function handleCallback(ctx: Context) {
           { parse_mode: "Markdown" }
         );
       } else {
-        await ctx.reply(`❌ Instant sell failed: ${result.error || "No market bids available"}`);
+        await ctx.reply(`❌ Instant sell failed: ${result.error || "No active market bids available"}`);
       }
     } catch (err) {
       await ctx.reply(`❌ Sell execution failed: ${errorMessage(err)}`);
@@ -754,7 +815,7 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
 
         sellButtons.push([
           { 
-            text: `💰 Sell #${item.tokenId} (${item.topBidEth > 0 ? `${item.topBidEth} ETH` : "Dump"})`, 
+            text: `💰 Liquidate #${item.tokenId} (${item.topBidEth > 0 ? `${item.topBidEth} ETH` : "Dump"})`, 
             callback_data: `sell_${item.contractAddress}_${item.tokenId}_${w.id}` 
           }
         ]);
