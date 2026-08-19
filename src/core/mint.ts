@@ -1,6 +1,8 @@
-import { type Address, type Hex, parseAbi, encodeFunctionData } from "viem";
+import { type Address, type Hex, parseAbi, encodeFunctionData, createWalletClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { base } from "viem/chains";
 import { prisma } from "../db/client.js";
-import { getWalletClient, getPublicClient, chain } from "./chain.js";
+import { getPublicClient, chain } from "./chain.js";
 import { getActiveWallets, getWalletPrivateKey } from "./wallet.js";
 import { scanContract, getBestMintFunction, simulateMint, type MintFunctionInfo } from "./scanner.js";
 
@@ -22,7 +24,6 @@ export interface BatchMintResult {
   totalFailed: number;
 }
 
-// In-memory quantity multiplier per user (defaults to 1x)
 const userMintQuantities = new Map<bigint, number>();
 
 export function getUserMintQuantity(userId: bigint): number {
@@ -44,7 +45,13 @@ export async function executeMintForWallet(
   prefetchedNonce?: number
 ): Promise<MintResult> {
   const privateKey = (await getWalletPrivateKey(walletId)) as Hex;
-  const walletClient = getWalletClient(privateKey);
+  const account = privateKeyToAccount(privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`);
+  const walletClient = createWalletClient({
+    account,
+    chain: base,
+    transport: http(),
+  });
+
   const publicClient = getPublicClient();
   const iterLabel = iteration > 1 ? `${label} (Mint #${iteration})` : label;
 
@@ -55,7 +62,6 @@ export async function executeMintForWallet(
 
     const args: unknown[] = mintFunction.args.length === 1 ? [1n] : [];
 
-    // Simulate first to prevent burning gas on reverted calls
     const simResult = await simulateMint(contractAddress, walletAddress, mintFunction);
     if (!simResult.success) {
       await recordMintHistory(userId, contractAddress, null, "SIMULATION_FAILED");
@@ -75,7 +81,6 @@ export async function executeMintForWallet(
       args: args as any,
     });
 
-    // Get sequential nonce if not provided
     const nonce = prefetchedNonce ?? await publicClient.getTransactionCount({
       address: walletAddress as Address,
       blockTag: "pending",
@@ -86,7 +91,7 @@ export async function executeMintForWallet(
       data,
       value: 0n,
       chain,
-      account: walletClient.account!,
+      account,
       nonce,
     });
 
@@ -169,7 +174,6 @@ export async function batchMint(
   const publicClient = getPublicClient();
 
   for (const w of activeWallets) {
-    // Fetch base pending nonce once per wallet before loop rounds
     let currentNonce = await publicClient.getTransactionCount({
       address: w.address as Address,
       blockTag: "pending",
@@ -189,13 +193,11 @@ export async function batchMint(
       allResults.push(res);
 
       if (res.success) {
-        currentNonce++; // Increment safely for the next round
+        currentNonce++;
       } else {
-        // If a wallet fails due to max allocation or error, break round loop for this wallet
         break;
       }
 
-      // Small buffer delay between rapid multiplier submissions
       if (round < rounds) {
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
