@@ -26,6 +26,11 @@ import { sweepDustToMaster } from "../core/sweeper.js";
 import { sweepAllNFTsToMaster } from "../core/nftSweeper.js";
 import { fundSubWallets } from "../core/funder.js";
 import { getEthUsdPrice, usdToEth } from "../core/price.js";
+import { 
+  checkGasSafety, 
+  getUserGasCeiling, 
+  setUserGasCeiling 
+} from "../core/gasGuard.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -44,6 +49,8 @@ import {
   backToWalletsKeyboard,
   portfolioKeyboard,
   fundAmountKeyboard,
+  settingsMenuKeyboard,
+  gasSettingsKeyboard,
 } from "./keyboards.js";
 
 interface SessionState {
@@ -98,9 +105,10 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
-• ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets with custom $ / ETH amounts
+• ⛽ Gas Guard — Automatically blocks mints if Base L2 gas price surges
+• ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets
 • 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets back to Wallet 1
-• 📦 Sweep NFTs — Consolidate all minted NFTs from sub-wallets into Wallet 1
+• 📦 Sweep NFTs — Consolidate all minted NFTs into Wallet 1
 • 🖼 Portfolio — View your minted NFTs, live floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
 • ⚡ Auto-Mint — automatically detect and batch-mint drops on Base
@@ -132,6 +140,58 @@ export async function handleCallback(ctx: Context) {
       reply_markup: mainMenuKeyboard(await getAutoMintStatus(telegramId)),
       parse_mode: "Markdown",
     });
+    return;
+  }
+
+  // Settings menu
+  if (data === "settings") {
+    clearSession(telegramId);
+    await ctx.editMessageText(
+      `🛡 **Bot Settings & Safety Controls**\n\nConfigure gas safety limits and bot preferences:`,
+      {
+        reply_markup: settingsMenuKeyboard(),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Gas guard sub-menu
+  if (data === "menu_gas_guard") {
+    clearSession(telegramId);
+    const gasCheck = await checkGasSafety(telegramId);
+    await ctx.editMessageText(
+      `⛽ **Gas Price Ceiling Guard**\n\n` +
+      `Current Base Gas Price: \`${gasCheck.currentGwei.toFixed(4)} Gwei\`\n` +
+      `Your Configured Ceiling: \`${gasCheck.maxGwei} Gwei\`\n\n` +
+      `If the network gas exceeds your limit, automatic and batch mints will safely abort to avoid high fees.\n\n` +
+      `Select your preferred maximum gas ceiling:`,
+      {
+        reply_markup: gasSettingsKeyboard(gasCheck.maxGwei),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Set gas ceiling
+  if (data.startsWith("setgas_")) {
+    const val = parseFloat(data.slice(7));
+    setUserGasCeiling(telegramId, val);
+    await ctx.editMessageText(
+      `✅ Gas ceiling updated to **${val} Gwei**!\n\nThe bot will skip mints if network gas rises above this level.`,
+      {
+        reply_markup: gasSettingsKeyboard(val),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Settings help text
+  if (data === "menu_help_text") {
+    clearSession(telegramId);
+    await helpCommand(ctx);
     return;
   }
 
@@ -476,13 +536,6 @@ export async function handleCallback(ctx: Context) {
       `🚀 **Manual Mint**\n\nPlease paste a contract address (0x...) to mint from all your active (✅) wallets.`,
       { parse_mode: "Markdown", reply_markup: backToMainKeyboard() }
     );
-    return;
-  }
-
-  // Settings
-  if (data === "settings") {
-    clearSession(telegramId);
-    await helpCommand(ctx);
     return;
   }
 
@@ -842,6 +895,22 @@ async function performScan(ctx: Context, telegramId: bigint, address: string) {
 }
 
 async function performMint(ctx: Context, telegramId: bigint, address: string) {
+  // Gas safety check before dispatching mint
+  const gasCheck = await checkGasSafety(telegramId);
+  if (!gasCheck.safe) {
+    await ctx.reply(
+      `⚠️ **MINT ABORTED (HIGH GAS)**\n\n` +
+      `Current Network Gas: \`${gasCheck.currentGwei.toFixed(4)} Gwei\`\n` +
+      `Your Configured Max: \`${gasCheck.maxGwei} Gwei\`\n\n` +
+      `The bot paused this mint to prevent burning high gas fees. You can adjust your limit in **🛡 Settings / Gas**.`,
+      {
+        reply_markup: backToMainKeyboard(),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
   const wallets = await getWallets(telegramId);
   const activeCount = wallets.filter((w) => w.isActive).length;
 
@@ -854,7 +923,7 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
   }
 
   await ctx.reply(
-    `🚀 **Starting Mint**\n\nContract: \`${shortenAddress(address)}\`\nActive Wallets: ${activeCount}\n\nMinting in progress...`,
+    `🚀 **Starting Mint**\n\nContract: \`${shortenAddress(address)}\`\nActive Wallets: ${activeCount}\nGas Price: \`${gasCheck.currentGwei.toFixed(4)} Gwei\` (Safe ✅)\n\nMinting in progress...`,
     { parse_mode: "Markdown" }
   );
 
