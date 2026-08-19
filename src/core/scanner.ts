@@ -9,6 +9,7 @@ import {
   isAddress 
 } from "viem";
 import { getPublicClient } from "./chain.js";
+import { auditContractSecurity, type SecurityReport } from "./security.js";
 
 export interface MintFunctionInfo {
   name: string;
@@ -25,6 +26,7 @@ export interface ScanResult {
   abi: Abi | null;
   bytecode: Hex | null;
   isContract: boolean;
+  security: SecurityReport;
   warning?: string;
 }
 
@@ -57,7 +59,6 @@ export async function fetchContractAbi(address: string): Promise<{ abi: Abi | nu
   const apiKey = process.env.BASESCAN_API_KEY || "";
   const baseUrl = process.env.BASESCAN_API_URL || "https://api.etherscan.io/v2/api";
 
-  // If using Etherscan V2, append chainid=8453 (Base mainnet); if legacy Basescan, omit chainid
   const isV2 = baseUrl.includes("etherscan.io/v2");
   const chainParam = isV2 ? "chainid=8453&" : "";
   const keyParam = apiKey ? `&apikey=${apiKey}` : "";
@@ -75,7 +76,6 @@ export async function fetchContractAbi(address: string): Promise<{ abi: Abi | nu
       return { abi, isVerified: true };
     }
 
-    // Fallback: If V2 fails, attempt legacy Basescan endpoint once
     if (isV2 && (!data.result || data.status !== "1")) {
       const fallbackUrl = `https://api.basescan.org/api?module=contract&action=getabi&address=${address}${keyParam}`;
       const fallbackRes = await fetch(fallbackUrl);
@@ -139,7 +139,7 @@ export function analyzeAbiForMintFunctions(abi: Abi): MintFunctionInfo[] {
           requiresPayment: isPayable || isPaid,
         });
       } catch {
-        // Skip invalid or non-standard ABI entries
+        // Skip non-standard ABI entries
       }
     }
   }
@@ -184,6 +184,7 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
       abi: null,
       bytecode: null,
       isContract: false,
+      security: { isSafe: false, isHoneypot: false, isDrainer: false, riskScore: 100, warnings: ["Invalid address format"] },
       warning: "Invalid Ethereum contract address format.",
     };
   }
@@ -204,7 +205,25 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
       abi: null,
       bytecode: null,
       isContract: false,
+      security: { isSafe: false, isHoneypot: false, isDrainer: false, riskScore: 100, warnings: ["No contract deployed"] },
       warning: "No contract found at this address on Base.",
+    };
+  }
+
+  // 3. Security & Honeypot Audit
+  const security = await auditContractSecurity(checksumAddress);
+
+  // If flagged as unsafe/honeypot, abort
+  if (!security.isSafe) {
+    return {
+      contractAddress: checksumAddress,
+      mintFunctions: [],
+      isVerified,
+      abi,
+      bytecode,
+      isContract: true,
+      security,
+      warning: `🚨 UNSAFE CONTRACT: ${security.warnings.join(", ")}`,
     };
   }
 
@@ -236,6 +255,7 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
     abi,
     bytecode,
     isContract: true,
+    security,
     warning,
   };
 }
