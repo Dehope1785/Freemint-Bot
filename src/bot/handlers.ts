@@ -23,6 +23,7 @@ import {
   executeSell 
 } from "../core/portfolio.js";
 import { sweepDustToMaster } from "../core/sweeper.js";
+import { fundSubWallets } from "../core/funder.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -40,9 +41,9 @@ import {
   backToMainKeyboard,
   backToWalletsKeyboard,
   portfolioKeyboard,
+  fundAmountKeyboard,
 } from "./keyboards.js";
 
-// Session state for multi-step flows
 interface SessionState {
   action: "import_key" | "scan" | "manual_mint" | "none";
   contractAddress?: string;
@@ -94,13 +95,12 @@ export async function helpCommand(ctx: Context) {
 /help — Show this help
 
 **Features:**
-• 💼 Manage multiple wallets (generate, import, toggle, delete, sweep)
-• 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets to Wallet 1
+• 💼 Manage multiple wallets (generate, import, toggle, delete)
+• ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets with one tap
+• 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets back to Wallet 1
 • 🖼 Portfolio — View your minted NFTs, live floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
-• 👥 Watchlist — track contracts and mint with one tap
-• ⚡ Auto-Mint — automatically mint from watchlist contracts
-• 🚀 Manual Mint — mint from all active wallets at once
+• ⚡ Auto-Mint — automatically detect and batch-mint drops on Base
 
 **Security:**
 • Private keys are encrypted with AES-256-GCM
@@ -139,7 +139,7 @@ export async function handleCallback(ctx: Context) {
     return;
   }
 
-  // Instant sell execution: sell_{contract}_{tokenId}_{walletId}
+  // Instant sell execution
   if (data.startsWith("sell_")) {
     const parts = data.split("_");
     const contractAddr = parts[1];
@@ -166,6 +166,64 @@ export async function handleCallback(ctx: Context) {
       }
     } catch (err) {
       await ctx.reply(`❌ Sell execution failed: ${errorMessage(err)}`);
+    }
+    return;
+  }
+
+  // Gas funding menu
+  if (data === "fund_menu") {
+    clearSession(telegramId);
+    const wallets = await getWallets(telegramId);
+    if (wallets.length < 2) {
+      await ctx.reply("❌ You need at least 2 wallets (Wallet 1 + sub-wallets) to distribute gas.", {
+        reply_markup: backToWalletsKeyboard(),
+      });
+      return;
+    }
+
+    await ctx.editMessageText(
+      `⛽ **Distribute Gas to All Sub-Wallets**\n\n` +
+      `Master: **${wallets[0].label}** (\`${shortenAddress(wallets[0].address)}\`)\n` +
+      `Target Recipients: **${wallets.length - 1} sub-wallets**\n\n` +
+      `Select the amount of Base ETH to send to **each** sub-wallet:`,
+      {
+        reply_markup: fundAmountKeyboard(),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Fund execution
+  if (data.startsWith("fund_")) {
+    const amountStr = data.slice(5);
+    const amountEth = parseFloat(amountStr);
+
+    await ctx.reply(`🚀 *Distributing ${amountEth} ETH to each sub-wallet...*`, {
+      parse_mode: "Markdown",
+    });
+
+    try {
+      const fund = await fundSubWallets(telegramId, amountEth);
+      let report = `✅ **Gas Distribution Completed!**\n\n💰 **Total Dispatched:** \`${fund.totalDistributedEth.toFixed(5)} ETH\`\n\n`;
+
+      for (const res of fund.results) {
+        if (res.txHash) {
+          report += `• **${res.walletLabel}**: Funded \`${res.fundedEth} ETH\` ([Tx](https://basescan.org/tx/${res.txHash}))\n`;
+        } else {
+          report += `• **${res.walletLabel}**: Failed (${res.error})\n`;
+        }
+      }
+
+      await ctx.reply(report, {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+        reply_markup: backToWalletsKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`❌ Distribution failed: ${errorMessage(err)}`, {
+        reply_markup: backToWalletsKeyboard(),
+      });
     }
     return;
   }
@@ -399,7 +457,6 @@ export async function handleText(ctx: Context) {
   const text = ctx.message.text.trim();
   const session = getSession(telegramId);
 
-  // Check if text is a contract address
   if (isValidAddress(text)) {
     const normalizedAddr = normalizeAddressInput(text);
     if (session.action === "manual_mint") {
@@ -417,7 +474,6 @@ export async function handleText(ctx: Context) {
     return;
   }
 
-  // Check if text is a private key
   if (isValidPrivateKey(text)) {
     if (session.action === "import_key") {
       clearSession(telegramId);
