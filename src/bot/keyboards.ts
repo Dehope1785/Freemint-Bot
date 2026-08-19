@@ -15,10 +15,23 @@ export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
 
 export function settingsMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
+    .text("💰 Auto-Sell / Take-Profit Triggers", "menu_autosell").row()
     .text("🔢 Mint Multiplier (Quantity / Wallet)", "menu_mint_qty").row()
     .text("⛽ Gas Price Ceiling Guard", "menu_gas_guard").row()
     .text("📖 Full Help & Guide", "menu_help_text").row()
     .text("🏠 Main Menu", "main_menu");
+}
+
+export function autoSellSettingsKeyboard(enabled: boolean, minEth: number, ethPrice: number): InlineKeyboard {
+  const calcUsd = (eth: number) => (eth * ethPrice).toFixed(2);
+
+  return new InlineKeyboard()
+    .text(enabled ? "⚡ Auto-Sell: ✅ ACTIVE" : "⚡ Auto-Sell: ❌ DISABLED", "toggle_autosell").row()
+    .text(`${minEth === 0.0005 ? "✅ " : ""}0.0005 ETH (~$${calcUsd(0.0005)})`, "set_as_0.0005")
+    .text(`${minEth === 0.0010 ? "✅ " : ""}0.0010 ETH (~$${calcUsd(0.0010)})`, "set_as_0.0010").row()
+    .text(`${minEth === 0.0025 ? "✅ " : ""}0.0025 ETH (~$${calcUsd(0.0025)})`, "set_as_0.0025")
+    .text(`${minEth === 0.0050 ? "✅ " : ""}0.0050 ETH (~$${calcUsd(0.0050)})`, "set_as_0.0050").row()
+    .text("🔙 Settings", "settings").text("🏠 Main Menu", "main_menu");
 }
 
 export function quantitySettingsKeyboard(currentQty: number): InlineKeyboard {
