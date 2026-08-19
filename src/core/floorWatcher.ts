@@ -2,16 +2,16 @@ import { type Bot } from "grammy";
 import { prisma } from "../db/client.js";
 import { fetchWalletPortfolio } from "./portfolio.js";
 import { shortenAddress } from "./chain.js";
+import { getAutoSellConfig, processAutoSellForToken } from "./autoSeller.js";
 
-// Stores known floor prices per token (key: `${contract}:${tokenId}`)
 const knownFloors = new Map<string, number>();
+const soldTokens = new Set<string>();
 
 export function startFloorWatcher(bot: Bot<any>, intervalSeconds: number = 300) {
-  console.log(`📈 NFT Floor Price & Bid Watcher active (interval: ${intervalSeconds}s)...`);
+  console.log(`📈 NFT Floor Price & Auto-Sell Watcher active (interval: ${intervalSeconds}s)...`);
 
   const runCheck = async () => {
     try {
-      // Find all registered users with wallets
       const users = (await (prisma as any).user.findMany({
         include: { wallets: true },
       })) as Array<any>;
@@ -19,9 +19,12 @@ export function startFloorWatcher(bot: Bot<any>, intervalSeconds: number = 300) 
       for (const user of users) {
         if (!user.wallets || user.wallets.length === 0) continue;
 
+        const userIdBigInt = BigInt(user.telegramId);
         const targetChatId = typeof user.telegramId === "bigint" 
           ? Number(user.telegramId) 
           : user.telegramId;
+
+        const autoSellConfig = getAutoSellConfig(userIdBigInt);
 
         for (const wallet of user.wallets) {
           const portfolio = await fetchWalletPortfolio(wallet.address);
@@ -29,11 +32,38 @@ export function startFloorWatcher(bot: Bot<any>, intervalSeconds: number = 300) 
 
           for (const item of portfolio.items) {
             const tokenKey = `${item.contractAddress.toLowerCase()}:${item.tokenId}`;
+            if (soldTokens.has(tokenKey)) continue;
+
             const lastFloor = knownFloors.get(tokenKey) ?? 0;
             const currentFloor = item.floorPriceEth;
             const currentBid = item.topBidEth;
 
-            // Trigger alert if a floor price or bid is detected for the first time or increases
+            // 1. Check for Auto-Sell Trigger
+            if (autoSellConfig.enabled && currentBid >= autoSellConfig.minPayoutEth) {
+              const sellResult = await processAutoSellForToken(
+                userIdBigInt,
+                item.contractAddress,
+                item.tokenId,
+                currentBid,
+                wallet.id
+              );
+
+              if (sellResult.success) {
+                soldTokens.add(tokenKey);
+                await bot.api.sendMessage(
+                  targetChatId,
+                  `⚡ **AUTO-SELL EXECUTED!**\n\n` +
+                  `🎨 **Collection:** ${item.collectionName} (#${item.tokenId})\n` +
+                  `👛 **Wallet:** ${wallet.label}\n` +
+                  `💰 **Payout Realized:** \`${sellResult.payoutEth} ETH\`\n` +
+                  `🔗 [View BaseScan Receipt](https://basescan.org/tx/${sellResult.txHash})`,
+                  { parse_mode: "Markdown" }
+                ).catch((err) => console.error("Auto-sell alert error:", err));
+                continue;
+              }
+            }
+
+            // 2. Otherwise, trigger manual alert if floor appears/rises
             if (currentFloor > 0 && currentFloor > lastFloor) {
               knownFloors.set(tokenKey, currentFloor);
 
@@ -44,7 +74,7 @@ export function startFloorWatcher(bot: Bot<any>, intervalSeconds: number = 300) 
                 `👛 *Wallet:* ${wallet.label} (\`${shortenAddress(wallet.address)}\`)\n\n` +
                 `💎 *Current Floor Price:* \`${currentFloor} ETH\`\n` +
                 `💰 *Top Instant Bid:* \`${currentBid > 0 ? `${currentBid} ETH` : "None"}\`\n\n` +
-                `_Your minted NFT now has active market liquidity!_`;
+                `_Tap below to liquidate immediately into the active bid:_`;
 
               await bot.api.sendMessage(targetChatId, alertMsg, {
                 parse_mode: "Markdown",
@@ -52,7 +82,7 @@ export function startFloorWatcher(bot: Bot<any>, intervalSeconds: number = 300) 
                   inline_keyboard: [
                     [
                       { 
-                        text: `💰 Instant Sell #${item.tokenId}`, 
+                        text: `💰 Liquidate Now #${item.tokenId} (${currentBid > 0 ? `${currentBid} ETH` : "Dump"})`, 
                         callback_data: `sell_${item.contractAddress}_${item.tokenId}_${wallet.id}` 
                       }
                     ],
@@ -73,7 +103,6 @@ export function startFloorWatcher(bot: Bot<any>, intervalSeconds: number = 300) 
     }
   };
 
-  // Initial run after 15 seconds, then repeat on interval
   setTimeout(runCheck, 15_000);
   setInterval(runCheck, intervalSeconds * 1000);
 }
