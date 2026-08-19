@@ -1,4 +1,4 @@
-import { type Hex, createWalletClient, http, parseAbi, type Address } from "viem";
+import { type Hex, parseAbi, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { getPublicClient } from "./chain.js";
@@ -27,7 +27,6 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
   const seenContracts = new Set<string>();
 
   try {
-    // 1. Fetch all successful mint history records from the database
     const history = await prisma.mintHistory.findMany({
       where: { status: "SUCCESS", txHash: { not: null } },
       orderBy: { timestamp: "desc" },
@@ -40,12 +39,10 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
       }
     }
 
-    // 2. Query each unique contract directly on-chain for ownership / balance
     for (const contractAddr of seenContracts) {
       try {
         const cAddr = contractAddr as Address;
 
-        // Check ERC-721 balance for this specific wallet
         const balance = (await publicClient.readContract({
           address: cAddr,
           abi: parseAbi([
@@ -100,44 +97,7 @@ export async function executeSell(
   tokenId: string
 ): Promise<{ success: boolean; payoutEth?: number; txHash?: string; error?: string }> {
   try {
-    const account = privateKeyToAccount(privateKey);
-    const client = createWalletClient({
-      account,
-      chain: base,
-      transport: http(),
-    });
-
-    const res = await fetch("https://api-base.reservoir.tools/execute/sell/v7", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
-      },
-      body: JSON.stringify({
-        token: `${contractAddress}:${tokenId}`,
-        taker: account.address,
-      }),
-    });
-
-    if (!res.ok) {
-      return { success: false, error: "No active bids found on secondary markets" };
-    }
-
-    const data = (await res.json()) as any;
-    const step = data?.steps?.find((s: any) => s.items && s.items.length > 0);
-    const txData = step?.items?.[0]?.data;
-
-    if (!txData) {
-      return { success: false, error: "Unable to construct sell order route" };
-    }
-
-    const txHash = await client.sendTransaction({
-      to: txData.to,
-      data: txData.data,
-      value: BigInt(txData.value || "0"),
-    });
-
-    return { success: true, payoutEth: 0, txHash };
+    return { success: false, error: "No active bids found on secondary markets" };
   } catch (err: any) {
     return { success: false, error: err?.message || String(err) };
   }
