@@ -30,13 +30,7 @@ export interface ScanResult {
   warning?: string;
 }
 
-// Known legitimate NFT Creator Factory and Protocol Addresses on Base (e.g. Zora Creator / Factory)
-const VERIFIED_FACTORIES = new Set([
-  "0x777777751622c0d3258f214f9df38e35bf45baf3", // Zora Factory on Base
-  // Add other trusted factory contracts or creator registries here as needed
-]);
-
-// Comprehensive free-mint signatures (Standard ERC-721/1155/Zora)
+// Comprehensive free-mint signatures for standard NFTs
 const FREE_MINT_PATTERNS: Array<{ name: string; args: string[] }> = [
   { name: "mint", args: [] },
   { name: "mint", args: ["uint256"] },
@@ -98,6 +92,43 @@ export async function getBytecode(address: Address): Promise<Hex | null> {
     console.error("Error fetching bytecode from RPC:", err);
     return null;
   }
+}
+
+// Check if the contract supports standard NFT functions (balanceOf, ownerOf, or tokenURI)
+async function verifyIsNftContract(address: Address, abi: Abi): Promise<boolean> {
+  const client = getPublicClient();
+  
+  // 1. Check ABI for standard NFT function names
+  const hasNftFunctions = abi.some((item: any) => {
+    if (item.type !== "function") return false;
+    const name = item.name?.toLowerCase() || "";
+    return name === "ownerof" || name === "tokenuri" || name === "safetransferfrom";
+  });
+
+  if (hasNftFunctions) return true;
+
+  // 2. Fallback: Quick on-chain check using supportsInterface (ERC-165 for ERC-721 / ERC-1155)
+  try {
+    const supportsErc721 = await client.readContract({
+      address,
+      abi: parseAbi(["function supportsInterface(bytes4 interfaceId) view returns (bool)"]),
+      functionName: "supportsInterface",
+      args: ["0x80ac58cd"], // ERC-721 interface ID
+    }).catch(() => false);
+
+    const supportsErc1155 = await client.readContract({
+      address,
+      abi: parseAbi(["function supportsInterface(bytes4 interfaceId) view returns (bool)"]),
+      functionName: "supportsInterface",
+      args: ["0xd9b67a26"], // ERC-1155 interface ID
+    }).catch(() => false);
+
+    if (supportsErc721 || supportsErc1155) return true;
+  } catch {
+    // Ignore RPC failure on check
+  }
+
+  return false;
 }
 
 export function analyzeAbiForMintFunctions(abi: Abi): MintFunctionInfo[] {
@@ -181,9 +212,7 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
     };
   }
 
-  // === QUALITY FILTER 1: Skip Unverified Random Junk ===
-  // Professional drops almost always have verified source code on BaseScan.
-  if (!isVerified) {
+  if (!isVerified || !abi) {
     return {
       contractAddress: checksumAddress,
       mintFunctions: [],
@@ -192,7 +221,22 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
       bytecode,
       isContract: true,
       security: { isSafe: false, isHoneypot: false, isDrainer: false, riskScore: 50, warnings: ["Unverified contract source"] },
-      warning: "Skipped: Contract source code is unverified (Potential low-quality / junk drop).",
+      warning: "Skipped: Contract source code is unverified.",
+    };
+  }
+
+  // === STRICT NFT FILTER: Reject tokens, pools, and non-NFT contracts ===
+  const isNft = await verifyIsNftContract(checksumAddress, abi);
+  if (!isNft) {
+    return {
+      contractAddress: checksumAddress,
+      mintFunctions: [],
+      isVerified,
+      abi,
+      bytecode,
+      isContract: true,
+      security: { isSafe: true, isHoneypot: false, isDrainer: false, riskScore: 10, warnings: ["Not an NFT contract"] },
+      warning: "Skipped: Contract is a token/DeFi protocol, not an NFT collection.",
     };
   }
 
@@ -212,14 +256,9 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
     };
   }
 
-  let mintFunctions: MintFunctionInfo[] = [];
-  if (abi) {
-    mintFunctions = analyzeAbiForMintFunctions(abi);
-  }
-
+  const mintFunctions = analyzeAbiForMintFunctions(abi);
   const freeMintFunctions = mintFunctions.filter((f) => f.isFreeMint && !f.requiresPayment);
 
-  // === QUALITY FILTER 2: Require Valid Free Mint Functions ===
   if (freeMintFunctions.length === 0) {
     return {
       contractAddress: checksumAddress,
@@ -229,7 +268,7 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
       bytecode,
       isContract: true,
       security,
-      warning: "Skipped: No valid verified free-mint function detected.",
+      warning: "Skipped: No valid free-mint function detected.",
     };
   }
 
