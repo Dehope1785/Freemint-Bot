@@ -1,4 +1,4 @@
-import { type Hex, createWalletClient, http, parseAbi, createPublicClient } from "viem";
+import { type Hex, createWalletClient, http, parseAbi, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { getPublicClient } from "./chain.js";
@@ -22,52 +22,67 @@ export interface WalletPortfolio {
 
 export async function fetchWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
   const items: PortfolioItem[] = [];
-  const normalizedAddr = walletAddress.toLowerCase() as `0x${string}`;
+  const normalizedAddr = walletAddress.toLowerCase() as Address;
   const publicClient = getPublicClient();
 
   try {
-    // 1. Fetch recent minted contracts from database history for this wallet's user or global drops
+    // 1. Fetch all successful mint history records from the database
     const history = await prisma.mintHistory.findMany({
       where: { status: "SUCCESS", txHash: { not: null } },
       orderBy: { timestamp: "desc" },
-      take: 15,
+      take: 25,
     });
 
     const uniqueContracts = Array.from(new Set(history.map((h) => h.contractAddress)));
 
-    // 2. Check on-chain balance and token ownership for each known contract
+    // 2. Check balance and query token IDs for each contract
     for (const contractAddr of uniqueContracts) {
       try {
-        const cAddr = contractAddr as `0x${string}`;
-        
-        // Check balance of this NFT contract for this wallet
+        const cAddr = contractAddr as Address;
+
+        // Check ERC-721 balance for this wallet
         const balance = (await publicClient.readContract({
           address: cAddr,
-          abi: parseAbi(["function balanceof(address owner) view returns (uint256)", "function balanceOf(address owner) view returns (uint256)"]),
+          abi: parseAbi([
+            "function balanceOf(address owner) view returns (uint256)",
+            "function name() view returns (string)",
+          ]),
           functionName: "balanceOf",
           args: [normalizedAddr],
         }).catch(() => 0n)) as bigint;
 
         if (balance && balance > 0n) {
-          // If wallet owns tokens here, look up recent tokenIds or scan first few IDs
+          let collectionName = `Contract ${cAddr.slice(0, 6)}...`;
+          try {
+            const nameResult = (await publicClient.readContract({
+              address: cAddr,
+              abi: parseAbi(["function name() view returns (string)"]),
+              functionName: "name",
+            })) as string;
+            if (nameResult) collectionName = nameResult;
+          } catch {
+            // Default name if contract doesn't implement name()
+          }
+
+          // Add an entry representing the tokens held in this contract
           items.push({
             contractAddress: cAddr,
-            tokenId: "Owned",
-            collectionName: `Contract ${cAddr.slice(0, 6)}...`,
+            tokenId: `x${balance.toString()}`,
+            collectionName: `${collectionName} (${balance.toString()} held)`,
             floorPriceEth: 0,
             topBidEth: 0,
             openseaUrl: `https://opensea.io/assets/base/${cAddr}`,
           });
         }
       } catch {
-        // Skip if contract doesn't standardly support balanceOf or fails
+        // Skip incompatible contracts
       }
     }
   } catch (err) {
     console.error("On-chain portfolio check error:", err);
   }
 
-  // Fallback to Reservoir if on-chain check returns nothing yet
+  // 3. Fallback to Reservoir API if database history check found nothing
   if (items.length === 0) {
     try {
       const res = await fetch(
@@ -96,8 +111,8 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
           }
         }
       }
-    } catch (e) {
-      // Ignore reservoir fallback errors
+    } catch {
+      // Ignore fallback network errors
     }
   }
 
