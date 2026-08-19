@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -12,9 +12,9 @@ model User {
   autoMintEnabled Boolean  @default(false)
   createdAt       DateTime @default(now())
 
-  wallets      Wallet[]
-  mintHistory  MintHistory[]
-  watchlist    Watchlist[]
+  wallets     Wallet[]
+  mintHistory MintHistory[]
+  watchlist   Watchlist[]
 }
 
 model Wallet {
