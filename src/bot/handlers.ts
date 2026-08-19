@@ -1,4 +1,5 @@
 import { type Context, InlineKeyboard } from "grammy";
+import { type Hex } from "viem";
 import {
   generateNewWallet,
   importWallet,
@@ -17,7 +18,10 @@ import {
 } from "../core/chain.js";
 import { scanContract } from "../core/scanner.js";
 import { batchMint } from "../core/mint.js";
-import { fetchWalletPortfolio } from "../core/portfolio.js";
+import { 
+  fetchWalletPortfolio, 
+  executeSell 
+} from "../core/portfolio.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -90,7 +94,7 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
-• 🖼 Portfolio — View your minted NFTs, floor prices, and OpenSea links
+• 🖼 Portfolio — View your minted NFTs, floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
 • 👥 Watchlist — track contracts and mint with one tap
 • ⚡ Auto-Mint — automatically mint from watchlist contracts
@@ -105,7 +109,7 @@ export async function helpCommand(ctx: Context) {
 
 **Security:**
 • Private keys are encrypted with AES-256-GCM
-• Exported keys are sent as self-destruct messages
+• Exported keys are sent securely
 • Only you can access your wallets
 
 **Chain:** Base (Chain ID: 8453)`;
@@ -137,6 +141,37 @@ export async function handleCallback(ctx: Context) {
   if (data === "portfolio") {
     clearSession(telegramId);
     await showPortfolioScreen(ctx, telegramId);
+    return;
+  }
+
+  // Instant sell execution: sell_{contract}_{tokenId}_{walletId}
+  if (data.startsWith("sell_")) {
+    const parts = data.split("_");
+    const contractAddr = parts[1];
+    const tokenId = parts[2];
+    const walletId = parts[3];
+
+    await ctx.reply(`⚡ Checking liquidity & executing instant sell for token #${tokenId}...`);
+
+    try {
+      const privateKey = await getWalletPrivateKey(walletId);
+      const hexKey = (privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`) as Hex;
+
+      const result = await executeSell(hexKey, contractAddr, tokenId);
+
+      if (result.success) {
+        await ctx.reply(
+          `🎉 **NFT SOLD SUCCESSFULLY!**\n\n` +
+          `💰 Payout: \`${result.payoutEth} ETH\`\n` +
+          `🔗 [View BaseScan Receipt](https://basescan.org/tx/${result.txHash})`,
+          { parse_mode: "Markdown" }
+        );
+      } else {
+        await ctx.reply(`❌ Instant sell failed: ${result.error || "No market bids available"}`);
+      }
+    } catch (err) {
+      await ctx.reply(`❌ Sell execution failed: ${errorMessage(err)}`);
+    }
     return;
   }
 
@@ -370,13 +405,11 @@ export async function handleText(ctx: Context) {
       await performImport(ctx, telegramId, text);
       return;
     }
-    // Auto-detect private key even without session
     clearSession(telegramId);
     await performImport(ctx, telegramId, text);
     return;
   }
 
-  // If in import_key session but text isn't a valid key
   if (session.action === "import_key") {
     await ctx.reply(
       "❌ That doesn't look like a valid private key. Expected 64 hex characters (with or without 0x prefix).",
@@ -385,7 +418,6 @@ export async function handleText(ctx: Context) {
     return;
   }
 
-  // If in scan or manual_mint session
   if (session.action === "scan" || session.action === "manual_mint") {
     await ctx.reply(
       "❌ That doesn't look like a valid contract address. Expected 0x followed by 40 hex characters.",
@@ -394,7 +426,6 @@ export async function handleText(ctx: Context) {
     return;
   }
 
-  // Unrecognized text - show main menu
   await showMainMenu(ctx);
 }
 
@@ -414,6 +445,7 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
   let text = `📊 **Base NFT Portfolio & Valuation**\n━━━━━━━━━━━━━━━━━━━━\n\n`;
   let combinedFloorEth = 0;
   let totalNftsHeld = 0;
+  const sellButtons: Array<Array<{ text: string; callback_data: string }>> = [];
 
   for (let i = 0; i < wallets.length; i++) {
     const w = wallets[i];
@@ -425,12 +457,20 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
     text += `💎 Est. Floor Value: ${portfolio.totalFloorValueEth.toFixed(4)} ETH\n`;
 
     if (portfolio.items.length > 0) {
-      for (const item of portfolio.items.slice(0, 4)) {
+      for (const item of portfolio.items.slice(0, 3)) {
         const floorDisplay = item.floorPriceEth > 0 ? `${item.floorPriceEth} ETH` : "Unlisted";
         const bidDisplay = item.topBidEth > 0 ? `${item.topBidEth} ETH` : "None";
         text += `  • **${item.collectionName}** (#${item.tokenId})\n`;
         text += `    Floor: \`${floorDisplay}\` | Bid: \`${bidDisplay}\`\n`;
-        text += `    🔗 [View on OpenSea](${item.openseaUrl})\n`;
+        text += `    🔗 [OpenSea](${item.openseaUrl})\n`;
+
+        // Add Instant Sell button for NFTs with bids or active floor
+        sellButtons.push([
+          { 
+            text: `💰 Sell #${item.tokenId} (${item.topBidEth > 0 ? `${item.topBidEth} ETH` : "Dump"})`, 
+            callback_data: `sell_${item.contractAddress}_${item.tokenId}_${w.id}` 
+          }
+        ]);
       }
     } else {
       text += `  _No NFTs found in this wallet._\n`;
@@ -445,15 +485,20 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
   text += `🏷 **Total NFTs Across Wallets:** ${totalNftsHeld}\n`;
   text += `💰 **Combined Floor Value:** ${combinedFloorEth.toFixed(4)} ETH`;
 
+  const kb = portfolioKeyboard();
+  for (const btnRow of sellButtons) {
+    kb.row(...btnRow.map((b) => InlineKeyboard.text(b.text, b.callback_data)));
+  }
+
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, {
-      reply_markup: portfolioKeyboard(),
+      reply_markup: kb,
       parse_mode: "Markdown",
       link_preview_options: { is_disabled: true },
     });
   } else {
     await ctx.reply(text, {
-      reply_markup: portfolioKeyboard(),
+      reply_markup: kb,
       parse_mode: "Markdown",
       link_preview_options: { is_disabled: true },
     });
