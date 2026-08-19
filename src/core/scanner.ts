@@ -28,7 +28,7 @@ export interface ScanResult {
   warning?: string;
 }
 
-// Expanded free-mint signatures (covering standard 721, 1155, Zora, and Manifold)
+// Comprehensive free-mint signatures (covering 721, 1155, Zora, and Manifold)
 const FREE_MINT_PATTERNS: Array<{ name: string; args: string[] }> = [
   { name: "mint", args: [] },
   { name: "mint", args: ["uint256"] },
@@ -42,26 +42,52 @@ const FREE_MINT_PATTERNS: Array<{ name: string; args: string[] }> = [
   { name: "claim", args: [] },
   { name: "claim", args: ["uint256"] },
   { name: "claim", args: ["address", "uint256"] },
+  { name: "claim", args: ["address", "uint256", "bytes32[]"] },
 ];
 
-const PAID_MINT_PATTERNS = ["mintWithETH", "paidMint", "mintWithPayment", "mintWithPrice"];
+const PAID_MINT_PATTERNS = [
+  "mintWithETH", 
+  "paidMint", 
+  "mintWithPayment", 
+  "mintWithPrice", 
+  "purchase"
+];
 
 export async function fetchContractAbi(address: string): Promise<{ abi: Abi | null; isVerified: boolean }> {
   const apiKey = process.env.BASESCAN_API_KEY || "";
-  const baseUrl = process.env.BASESCAN_API_URL || "https://api.basescan.org/api";
-  const url = `${baseUrl}?module=contract&action=getabi&address=${address}${apiKey ? `&apikey=${apiKey}` : ""}`;
+  const baseUrl = process.env.BASESCAN_API_URL || "https://api.etherscan.io/v2/api";
+
+  // If using Etherscan V2, append chainid=8453 (Base mainnet); if legacy Basescan, omit chainid
+  const isV2 = baseUrl.includes("etherscan.io/v2");
+  const chainParam = isV2 ? "chainid=8453&" : "";
+  const keyParam = apiKey ? `&apikey=${apiKey}` : "";
+
+  const url = `${baseUrl}?${chainParam}module=contract&action=getabi&address=${address}${keyParam}`;
 
   try {
-    const response = await fetch(url);
-    const data = (await response.json()) as { status?: string; result?: string };
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" }
+    });
+    const data = (await response.json()) as { status?: string; result?: string; message?: string };
 
     if (data.status === "1" && data.result && data.result.startsWith("[")) {
       const abi = JSON.parse(data.result) as Abi;
       return { abi, isVerified: true };
     }
+
+    // Fallback: If V2 fails, attempt legacy Basescan endpoint once
+    if (isV2 && (!data.result || data.status !== "1")) {
+      const fallbackUrl = `https://api.basescan.org/api?module=contract&action=getabi&address=${address}${keyParam}`;
+      const fallbackRes = await fetch(fallbackUrl);
+      const fallbackData = (await fallbackRes.json()) as { status?: string; result?: string };
+      if (fallbackData.status === "1" && fallbackData.result && fallbackData.result.startsWith("[")) {
+        return { abi: JSON.parse(fallbackData.result) as Abi, isVerified: true };
+      }
+    }
+
     return { abi: null, isVerified: false };
   } catch (error) {
-    console.error("Basescan ABI fetch error:", error);
+    console.error("ABI fetch error:", error);
     return { abi: null, isVerified: false };
   }
 }
@@ -73,7 +99,7 @@ export async function getBytecode(address: Address): Promise<Hex | null> {
     if (!code || code === "0x") return null;
     return code;
   } catch (err) {
-    console.error("Error fetching bytecode:", err);
+    console.error("Error fetching bytecode from RPC:", err);
     return null;
   }
 }
@@ -93,8 +119,6 @@ export function analyzeAbiForMintFunctions(abi: Abi): MintFunctionInfo[] {
 
     const isPaid = PAID_MINT_PATTERNS.some((p) => fn.name.toLowerCase().includes(p.toLowerCase()));
     const isPayable = fn.stateMutability === "payable" || fn.payable === true;
-
-    // Check against free mint pattern lists or any non-payable mint/claim function
     const isMintName = /mint|claim|collect/i.test(fn.name);
 
     if (isMintName) {
@@ -115,7 +139,7 @@ export function analyzeAbiForMintFunctions(abi: Abi): MintFunctionInfo[] {
           requiresPayment: isPayable || isPaid,
         });
       } catch {
-        // Skip invalid ABI items
+        // Skip invalid or non-standard ABI entries
       }
     }
   }
@@ -141,7 +165,7 @@ export function analyzeBytecodeForMintSelectors(bytecode: Hex): MintFunctionInfo
         });
       }
     } catch {
-      // Continue
+      // Continue search
     }
   }
 
@@ -166,10 +190,10 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
 
   const checksumAddress = getAddress(hexAddress);
 
-  // Check bytecode on Base RPC
+  // 1. Fetch bytecode from RPC
   const bytecode = await getBytecode(checksumAddress);
   
-  // Try fetching verified ABI
+  // 2. Fetch ABI from explorer
   const { abi, isVerified } = await fetchContractAbi(checksumAddress);
 
   if (!bytecode && !abi) {
@@ -190,6 +214,7 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
     mintFunctions = analyzeAbiForMintFunctions(abi);
   }
 
+  // Fallback: Check bytecode for known function selectors if unverified
   if (mintFunctions.length === 0 && bytecode) {
     mintFunctions = analyzeBytecodeForMintSelectors(bytecode);
   }
@@ -228,6 +253,7 @@ export async function simulateMint(
     const args = mintFunction.args.map((type) => {
       if (type === "uint256") return 1n;
       if (type === "address") return getAddress(fromAddress);
+      if (type === "bytes32[]") return [];
       return "0x";
     });
 
@@ -256,5 +282,7 @@ export function getBestMintFunction(functions: MintFunctionInfo[]): MintFunction
   if (noArg) return noArg;
   const withArg = functions.find((f) => f.args.length === 1 && f.args[0] === "uint256");
   if (withArg) return withArg;
+  const withRecipient = functions.find((f) => f.args.includes("address"));
+  if (withRecipient) return withRecipient;
   return functions[0] || null;
 }
