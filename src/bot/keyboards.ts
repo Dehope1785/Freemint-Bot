@@ -19,12 +19,15 @@ export function portfolioKeyboard(): InlineKeyboard {
     .text("🏠 Main Menu", "main_menu");
 }
 
-export function fundAmountKeyboard(): InlineKeyboard {
+export function fundAmountKeyboard(ethPrice: number): InlineKeyboard {
+  const calcUsd = (eth: number) => (eth * ethPrice).toFixed(2);
+
   return new InlineKeyboard()
-    .text("⚡ 0.0003 ETH (~$1.00)", "fund_0.0003")
-    .text("⚡ 0.0005 ETH (~$1.60)", "fund_0.0005").row()
-    .text("⚡ 0.001 ETH (~$3.20)", "fund_0.001")
-    .text("⚡ 0.002 ETH (~$6.40)", "fund_0.002").row()
+    .text(`⚡ 0.0003 ETH (~$${calcUsd(0.0003)})`, "fund_0.0003")
+    .text(`⚡ 0.0005 ETH (~$${calcUsd(0.0005)})`, "fund_0.0005").row()
+    .text(`⚡ 0.0010 ETH (~$${calcUsd(0.0010)})`, "fund_0.001")
+    .text(`⚡ 0.0020 ETH (~$${calcUsd(0.0020)})`, "fund_0.002").row()
+    .text("✍️ Custom Amount ($ / ETH)", "fund_custom").row()
     .text("🔙 Wallets", "wallets").text("🏠 Main Menu", "main_menu");
 }
 
