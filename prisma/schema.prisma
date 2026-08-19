@@ -12,9 +12,11 @@ model User {
   autoMintEnabled Boolean  @default(false)
   createdAt       DateTime @default(now())
 
-  wallets     Wallet[]
-  mintHistory MintHistory[]
-  watchlist   Watchlist[]
+  wallets        Wallet[]
+  mintHistory    MintHistory[]
+  watchlist      Watchlist[]
+  trackedWallets TrackedWallet[]
+  sniperConfig   SniperConfig?
 }
 
 model Wallet {
@@ -54,4 +56,27 @@ model Watchlist {
 
   @@unique([userId, contractAddress])
   @@index([userId])
+}
+
+model TrackedWallet {
+  id         String   @id @default(cuid())
+  userId     BigInt
+  address    String
+  label      String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [telegramId], onDelete: Cascade)
+
+  @@unique([userId, address])
+  @@index([userId])
+}
+
+model SniperConfig {
+  userId      BigInt   @id
+  autoCopy    Boolean  @default(false)
+  maxSpendEth Float    @default(0.0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [telegramId], onDelete: Cascade)
 }
