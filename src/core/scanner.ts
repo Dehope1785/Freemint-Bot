@@ -30,7 +30,13 @@ export interface ScanResult {
   warning?: string;
 }
 
-// Comprehensive free-mint signatures (covering 721, 1155, Zora, and Manifold)
+// Known legitimate NFT Creator Factory and Protocol Addresses on Base (e.g. Zora Creator / Factory)
+const VERIFIED_FACTORIES = new Set([
+  "0x777777751622c0d3258f214f9df38e35bf45baf3", // Zora Factory on Base
+  // Add other trusted factory contracts or creator registries here as needed
+]);
+
+// Comprehensive free-mint signatures (Standard ERC-721/1155/Zora)
 const FREE_MINT_PATTERNS: Array<{ name: string; args: string[] }> = [
   { name: "mint", args: [] },
   { name: "mint", args: ["uint256"] },
@@ -44,7 +50,6 @@ const FREE_MINT_PATTERNS: Array<{ name: string; args: string[] }> = [
   { name: "claim", args: [] },
   { name: "claim", args: ["uint256"] },
   { name: "claim", args: ["address", "uint256"] },
-  { name: "claim", args: ["address", "uint256", "bytes32[]"] },
 ];
 
 const PAID_MINT_PATTERNS = [
@@ -74,15 +79,6 @@ export async function fetchContractAbi(address: string): Promise<{ abi: Abi | nu
     if (data.status === "1" && data.result && data.result.startsWith("[")) {
       const abi = JSON.parse(data.result) as Abi;
       return { abi, isVerified: true };
-    }
-
-    if (isV2 && (!data.result || data.status !== "1")) {
-      const fallbackUrl = `https://api.basescan.org/api?module=contract&action=getabi&address=${address}${keyParam}`;
-      const fallbackRes = await fetch(fallbackUrl);
-      const fallbackData = (await fallbackRes.json()) as { status?: string; result?: string };
-      if (fallbackData.status === "1" && fallbackData.result && fallbackData.result.startsWith("[")) {
-        return { abi: JSON.parse(fallbackData.result) as Abi, isVerified: true };
-      }
     }
 
     return { abi: null, isVerified: false };
@@ -147,31 +143,6 @@ export function analyzeAbiForMintFunctions(abi: Abi): MintFunctionInfo[] {
   return functions;
 }
 
-export function analyzeBytecodeForMintSelectors(bytecode: Hex): MintFunctionInfo[] {
-  const found: MintFunctionInfo[] = [];
-
-  for (const pattern of FREE_MINT_PATTERNS) {
-    try {
-      const abiItem = parseAbi([`function ${pattern.name}(${pattern.args.join(",")})`] as const);
-      const selector = getFunctionSelector(abiItem[0] as any);
-
-      if (bytecode.includes(selector.slice(2))) {
-        found.push({
-          name: pattern.name,
-          selector,
-          args: pattern.args,
-          isFreeMint: true,
-          requiresPayment: false,
-        });
-      }
-    } catch {
-      // Continue search
-    }
-  }
-
-  return found;
-}
-
 export async function scanContract(rawAddress: string): Promise<ScanResult> {
   const cleanInput = rawAddress.trim();
   const hexAddress = cleanInput.startsWith("0x") ? cleanInput : `0x${cleanInput}`;
@@ -210,10 +181,24 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
     };
   }
 
+  // === QUALITY FILTER 1: Skip Unverified Random Junk ===
+  // Professional drops almost always have verified source code on BaseScan.
+  if (!isVerified) {
+    return {
+      contractAddress: checksumAddress,
+      mintFunctions: [],
+      isVerified: false,
+      abi,
+      bytecode,
+      isContract: true,
+      security: { isSafe: false, isHoneypot: false, isDrainer: false, riskScore: 50, warnings: ["Unverified contract source"] },
+      warning: "Skipped: Contract source code is unverified (Potential low-quality / junk drop).",
+    };
+  }
+
   // 3. Security & Honeypot Audit
   const security = await auditContractSecurity(checksumAddress);
 
-  // If flagged as unsafe/honeypot, abort
   if (!security.isSafe) {
     return {
       contractAddress: checksumAddress,
@@ -228,24 +213,24 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
   }
 
   let mintFunctions: MintFunctionInfo[] = [];
-
   if (abi) {
     mintFunctions = analyzeAbiForMintFunctions(abi);
   }
 
-  // Fallback: Check bytecode for known function selectors if unverified
-  if (mintFunctions.length === 0 && bytecode) {
-    mintFunctions = analyzeBytecodeForMintSelectors(bytecode);
-  }
-
   const freeMintFunctions = mintFunctions.filter((f) => f.isFreeMint && !f.requiresPayment);
-  const paidFunctions = mintFunctions.filter((f) => f.requiresPayment);
 
-  let warning: string | undefined;
-  if (paidFunctions.length > 0 && freeMintFunctions.length === 0) {
-    warning = "All detected mint functions require payment (Not a Free Mint).";
-  } else if (mintFunctions.length === 0) {
-    warning = "No standard mint functions detected on this contract.";
+  // === QUALITY FILTER 2: Require Valid Free Mint Functions ===
+  if (freeMintFunctions.length === 0) {
+    return {
+      contractAddress: checksumAddress,
+      mintFunctions: [],
+      isVerified,
+      abi,
+      bytecode,
+      isContract: true,
+      security,
+      warning: "Skipped: No valid verified free-mint function detected.",
+    };
   }
 
   return {
@@ -256,7 +241,7 @@ export async function scanContract(rawAddress: string): Promise<ScanResult> {
     bytecode,
     isContract: true,
     security,
-    warning,
+    warning: undefined,
   };
 }
 
@@ -302,7 +287,5 @@ export function getBestMintFunction(functions: MintFunctionInfo[]): MintFunction
   if (noArg) return noArg;
   const withArg = functions.find((f) => f.args.length === 1 && f.args[0] === "uint256");
   if (withArg) return withArg;
-  const withRecipient = functions.find((f) => f.args.includes("address"));
-  if (withRecipient) return withRecipient;
   return functions[0] || null;
 }
