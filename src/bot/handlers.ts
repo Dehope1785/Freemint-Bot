@@ -23,6 +23,7 @@ import {
   executeSell 
 } from "../core/portfolio.js";
 import { sweepDustToMaster } from "../core/sweeper.js";
+import { sweepAllNFTsToMaster } from "../core/nftSweeper.js";
 import { fundSubWallets } from "../core/funder.js";
 import { getEthUsdPrice, usdToEth } from "../core/price.js";
 import {
@@ -99,6 +100,7 @@ export async function helpCommand(ctx: Context) {
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
 • ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets with custom $ / ETH amounts
 • 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets back to Wallet 1
+• 📦 Sweep NFTs — Consolidate all minted NFTs from sub-wallets into Wallet 1
 • 🖼 Portfolio — View your minted NFTs, live floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
 • ⚡ Auto-Mint — automatically detect and batch-mint drops on Base
@@ -137,6 +139,54 @@ export async function handleCallback(ctx: Context) {
   if (data === "portfolio") {
     clearSession(telegramId);
     await showPortfolioScreen(ctx, telegramId);
+    return;
+  }
+
+  // Sweep all NFTs to Wallet 1
+  if (data === "sweep_nfts") {
+    clearSession(telegramId);
+    const wallets = await getWallets(telegramId);
+    if (wallets.length < 2) {
+      await ctx.reply("❌ You need at least 2 wallets to consolidate NFTs.", {
+        reply_markup: backToWalletsKeyboard(),
+      });
+      return;
+    }
+
+    const masterVault = wallets[0].address;
+    await ctx.reply(`📦 *Consolidating all sub-wallet NFTs into ${wallets[0].label} (\`${shortenAddress(masterVault)}\`)...*`, {
+      parse_mode: "Markdown",
+    });
+
+    try {
+      const sweep = await sweepAllNFTsToMaster(telegramId, masterVault);
+      if (sweep.totalMoved === 0) {
+        await ctx.reply("ℹ️ No NFTs found in sub-wallets to sweep.", {
+          reply_markup: portfolioKeyboard(),
+        });
+        return;
+      }
+
+      let report = `✅ **NFT Consolidation Completed!**\n\n📦 **Total Moved:** \`${sweep.totalMoved} NFT(s)\`\n📥 **Destination:** \`${shortenAddress(masterVault)}\`\n\n`;
+
+      for (const res of sweep.results) {
+        if (res.txHash) {
+          report += `• **${res.collectionName}** (#${res.tokenId}) from ${res.fromWallet} ([Tx](https://basescan.org/tx/${res.txHash}))\n`;
+        } else {
+          report += `• Failed #${res.tokenId} (${res.error})\n`;
+        }
+      }
+
+      await ctx.reply(report, {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+        reply_markup: portfolioKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`❌ NFT sweep failed: ${errorMessage(err)}`, {
+        reply_markup: portfolioKeyboard(),
+      });
+    }
     return;
   }
 
@@ -477,7 +527,7 @@ export async function handleText(ctx: Context) {
   const text = ctx.message.text.trim();
   const session = getSession(telegramId);
 
-  // Handle custom gas funding input ($1.50, 2 usd, 0.0005 eth)
+  // Handle custom gas funding input
   if (session.action === "fund_custom") {
     clearSession(telegramId);
     let amountEth = 0;
@@ -497,7 +547,6 @@ export async function handleText(ctx: Context) {
       amountEth = numericVal;
     }
 
-    // Round to 6 decimals
     amountEth = Math.round(amountEth * 1e6) / 1e6;
 
     await ctx.reply(`🚀 *Distributing ${amountEth} ETH (~$${numericVal.toFixed(2)}) to each sub-wallet...*`, {
