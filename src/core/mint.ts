@@ -1,6 +1,6 @@
 import { type Address, type Hex, parseAbi, encodeFunctionData } from "viem";
 import { prisma } from "../db/client.js";
-import { getWalletClient, getPublicClient } from "./chain.js";
+import { getWalletClient, getPublicClient, chain } from "./chain.js";
 import { getActiveWallets, getWalletPrivateKey } from "./wallet.js";
 import { scanContract, getBestMintFunction, simulateMint, type MintFunctionInfo } from "./scanner.js";
 
@@ -40,7 +40,8 @@ export async function executeMintForWallet(
   contractAddress: string,
   mintFunction: MintFunctionInfo,
   userId: bigint,
-  iteration: number = 1
+  iteration: number = 1,
+  prefetchedNonce?: number
 ): Promise<MintResult> {
   const privateKey = (await getWalletPrivateKey(walletId)) as Hex;
   const walletClient = getWalletClient(privateKey);
@@ -74,12 +75,19 @@ export async function executeMintForWallet(
       args: args as any,
     });
 
+    // Get sequential nonce if not provided
+    const nonce = prefetchedNonce ?? await publicClient.getTransactionCount({
+      address: walletAddress as Address,
+      blockTag: "pending",
+    });
+
     const txHash = await walletClient.sendTransaction({
       to: contractAddress as Address,
       data,
       value: 0n,
-      chain: undefined,
+      chain,
       account: walletClient.account!,
+      nonce,
     });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
@@ -158,8 +166,15 @@ export async function batchMint(
 
   const rounds = getUserMintQuantity(userId);
   const allResults: MintResult[] = [];
+  const publicClient = getPublicClient();
 
   for (const w of activeWallets) {
+    // Fetch base pending nonce once per wallet before loop rounds
+    let currentNonce = await publicClient.getTransactionCount({
+      address: w.address as Address,
+      blockTag: "pending",
+    });
+
     for (let round = 1; round <= rounds; round++) {
       const res = await executeMintForWallet(
         w.id,
@@ -168,13 +183,21 @@ export async function batchMint(
         contractAddress,
         mintFunction,
         userId,
-        round
+        round,
+        currentNonce
       );
       allResults.push(res);
 
-      // If a wallet fails due to max allocation, break loop for this wallet
-      if (!res.success) {
+      if (res.success) {
+        currentNonce++; // Increment safely for the next round
+      } else {
+        // If a wallet fails due to max allocation or error, break round loop for this wallet
         break;
+      }
+
+      // Small buffer delay between rapid multiplier submissions
+      if (round < rounds) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
   }
