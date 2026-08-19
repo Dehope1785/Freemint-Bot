@@ -39,6 +39,7 @@ export function walletsKeyboard(wallets: WalletInfo[]): InlineKeyboard {
 
   // Sub-buttons
   kb.text("➕ Generate New", "new_wallet").row()
+    .text("🧹 Sweep All ETH Dust", "sweep_dust").row()
     .text("📥 Import Key", "import_key").row()
     .text("🔑 Export Keys", "export_keys").row()
     .text("🗑 Delete Wallet", "delete_wallet").row()
