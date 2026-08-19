@@ -24,6 +24,7 @@ import {
 } from "../core/portfolio.js";
 import { sweepDustToMaster } from "../core/sweeper.js";
 import { fundSubWallets } from "../core/funder.js";
+import { getEthUsdPrice, usdToEth } from "../core/price.js";
 import {
   addToWatchlist,
   removeFromWatchlist,
@@ -45,7 +46,7 @@ import {
 } from "./keyboards.js";
 
 interface SessionState {
-  action: "import_key" | "scan" | "manual_mint" | "none";
+  action: "import_key" | "scan" | "manual_mint" | "fund_custom" | "none";
   contractAddress?: string;
 }
 
@@ -96,7 +97,7 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
-• ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets with one tap
+• ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets with custom $ / ETH amounts
 • 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets back to Wallet 1
 • 🖼 Portfolio — View your minted NFTs, live floor prices, and instant-sell buttons
 • 🔍 Scan any Base contract for free-mint functions
@@ -181,20 +182,39 @@ export async function handleCallback(ctx: Context) {
       return;
     }
 
+    const ethPrice = await getEthUsdPrice();
+
     await ctx.editMessageText(
       `⛽ **Distribute Gas to All Sub-Wallets**\n\n` +
       `Master: **${wallets[0].label}** (\`${shortenAddress(wallets[0].address)}\`)\n` +
-      `Target Recipients: **${wallets.length - 1} sub-wallets**\n\n` +
-      `Select the amount of Base ETH to send to **each** sub-wallet:`,
+      `Target Recipients: **${wallets.length - 1} sub-wallets**\n` +
+      `ETH/USD Price: **$${ethPrice.toLocaleString()}**\n\n` +
+      `Select a preset or tap **Custom Amount**:`,
       {
-        reply_markup: fundAmountKeyboard(),
+        reply_markup: fundAmountKeyboard(ethPrice),
         parse_mode: "Markdown",
       }
     );
     return;
   }
 
-  // Fund execution
+  // Custom fund amount prompt
+  if (data === "fund_custom") {
+    setSession(telegramId, { action: "fund_custom" });
+    await ctx.editMessageText(
+      `✍️ **Enter Custom Funding Amount**\n\n` +
+      `Type the amount you want to send to each sub-wallet:\n\n` +
+      `• In USD: e.g. \`$1.50\` or \`2 usd\`\n` +
+      `• In ETH: e.g. \`0.0004 eth\``,
+      {
+        reply_markup: backToWalletsKeyboard(),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Fund preset execution
   if (data.startsWith("fund_")) {
     const amountStr = data.slice(5);
     const amountEth = parseFloat(amountStr);
@@ -457,6 +477,59 @@ export async function handleText(ctx: Context) {
   const text = ctx.message.text.trim();
   const session = getSession(telegramId);
 
+  // Handle custom gas funding input ($1.50, 2 usd, 0.0005 eth)
+  if (session.action === "fund_custom") {
+    clearSession(telegramId);
+    let amountEth = 0;
+    const clean = text.toLowerCase().replace("$", "").replace("usd", "").replace("eth", "").trim();
+    const numericVal = parseFloat(clean);
+
+    if (isNaN(numericVal) || numericVal <= 0) {
+      await ctx.reply("❌ Invalid amount entered. Please try again.", {
+        reply_markup: backToWalletsKeyboard(),
+      });
+      return;
+    }
+
+    if (text.includes("$") || text.toLowerCase().includes("usd")) {
+      amountEth = await usdToEth(numericVal);
+    } else {
+      amountEth = numericVal;
+    }
+
+    // Round to 6 decimals
+    amountEth = Math.round(amountEth * 1e6) / 1e6;
+
+    await ctx.reply(`🚀 *Distributing ${amountEth} ETH (~$${numericVal.toFixed(2)}) to each sub-wallet...*`, {
+      parse_mode: "Markdown",
+    });
+
+    try {
+      const fund = await fundSubWallets(telegramId, amountEth);
+      let report = `✅ **Gas Distribution Completed!**\n\n💰 **Total Dispatched:** \`${fund.totalDistributedEth.toFixed(5)} ETH\`\n\n`;
+
+      for (const res of fund.results) {
+        if (res.txHash) {
+          report += `• **${res.walletLabel}**: Funded \`${res.fundedEth} ETH\` ([Tx](https://basescan.org/tx/${res.txHash}))\n`;
+        } else {
+          report += `• **${res.walletLabel}**: Failed (${res.error})\n`;
+        }
+      }
+
+      await ctx.reply(report, {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+        reply_markup: backToWalletsKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`❌ Distribution failed: ${errorMessage(err)}`, {
+        reply_markup: backToWalletsKeyboard(),
+      });
+    }
+    return;
+  }
+
+  // Contract address auto-scan
   if (isValidAddress(text)) {
     const normalizedAddr = normalizeAddressInput(text);
     if (session.action === "manual_mint") {
@@ -474,6 +547,7 @@ export async function handleText(ctx: Context) {
     return;
   }
 
+  // Private key import
   if (isValidPrivateKey(text)) {
     if (session.action === "import_key") {
       clearSession(telegramId);
