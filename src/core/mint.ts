@@ -2,7 +2,7 @@ import { type Address, type Hex, parseAbi, encodeFunctionData, createWalletClien
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { prisma } from "../db/client.js";
-import { getPublicClient, chain } from "./chain.js";
+import { getPublicClient } from "./chain.js";
 import { getActiveWallets, getWalletPrivateKey } from "./wallet.js";
 import { scanContract, getBestMintFunction, simulateMint, type MintFunctionInfo } from "./scanner.js";
 
@@ -90,7 +90,7 @@ export async function executeMintForWallet(
       to: contractAddress as Address,
       data,
       value: 0n,
-      chain,
+      chain: base,
       account,
       nonce,
     });
