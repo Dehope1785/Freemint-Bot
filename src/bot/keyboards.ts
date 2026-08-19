@@ -15,6 +15,7 @@ export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
 
 export function portfolioKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
+    .text("📦 Sweep All NFTs to Wallet 1", "sweep_nfts").row()
     .text("🔄 Refresh Portfolio", "portfolio").row()
     .text("🏠 Main Menu", "main_menu");
 }
