@@ -19,10 +19,18 @@ export function portfolioKeyboard(): InlineKeyboard {
     .text("🏠 Main Menu", "main_menu");
 }
 
+export function fundAmountKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("⚡ 0.0003 ETH (~$1.00)", "fund_0.0003")
+    .text("⚡ 0.0005 ETH (~$1.60)", "fund_0.0005").row()
+    .text("⚡ 0.001 ETH (~$3.20)", "fund_0.001")
+    .text("⚡ 0.002 ETH (~$6.40)", "fund_0.002").row()
+    .text("🔙 Wallets", "wallets").text("🏠 Main Menu", "main_menu");
+}
+
 export function walletsKeyboard(wallets: WalletInfo[]): InlineKeyboard {
   const kb = new InlineKeyboard();
 
-  // List wallets in pairs
   for (let i = 0; i < wallets.length; i += 2) {
     const w1 = wallets[i];
     const w2 = wallets[i + 1];
@@ -37,8 +45,8 @@ export function walletsKeyboard(wallets: WalletInfo[]): InlineKeyboard {
     kb.row();
   }
 
-  // Sub-buttons
   kb.text("➕ Generate New", "new_wallet").row()
+    .text("⛽ Refuel / Distribute Gas", "fund_menu").row()
     .text("🧹 Sweep All ETH Dust", "sweep_dust").row()
     .text("📥 Import Key", "import_key").row()
     .text("🔑 Export Keys", "export_keys").row()
