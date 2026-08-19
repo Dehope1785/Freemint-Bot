@@ -5,6 +5,7 @@ import { startAutoMintLoop } from "./core/autoMint.js";
 import { prisma } from "./db/client.js";
 import { BaseDropListener } from "./core/listener.js";
 import { scanContract } from "./core/scanner.js";
+import { startFloorWatcher } from "./core/floorWatcher.js";
 
 async function main() {
   console.log("🚀 Starting Base Auto-Mint Bot...");
@@ -30,11 +31,14 @@ async function main() {
   // Create bot instance
   const bot = createBot();
 
-  // Start health check server
+  // Start health check server for Railway
   startHealthServer(bot);
 
   // Start auto-mint polling loop
   startAutoMintLoop(bot);
+
+  // 📈 Start Background Floor Price & Value Alert Watcher (every 5 mins)
+  startFloorWatcher(bot, 300);
 
   // 📡 Real-Time Free-Mint Auto-Discovery Block Sniffer
   const dropListener = new BaseDropListener(async (drop) => {
@@ -50,7 +54,6 @@ async function main() {
         `🔍 *Verified:* ${scan.isVerified ? "✅ Yes" : "⚠️ Bytecode"}\n\n` +
         `_Tap below to mint with your active wallets:_`;
 
-      // Fetch all users safely with included active wallets
       const activeUsers = (await (prisma as any).user.findMany({
         include: { wallets: true },
       })) as Array<any>;
@@ -78,10 +81,9 @@ async function main() {
     }
   });
 
-  // Start listening to the Base blockchain
   dropListener.start();
 
-  // Graceful shutdown handlers
+  // Graceful shutdown
   const handleShutdown = async (signal: string) => {
     console.log(`🛑 Shutting down (${signal})...`);
     dropListener.stop();
@@ -93,7 +95,7 @@ async function main() {
   process.on("SIGINT", () => handleShutdown("SIGINT"));
   process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 
-  // Start grammY bot polling
+  // Start grammY polling
   try {
     await bot.start({
       onStart: (botInfo) => {
