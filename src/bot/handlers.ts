@@ -17,7 +17,11 @@ import {
   normalizeAddressInput,
 } from "../core/chain.js";
 import { scanContract } from "../core/scanner.js";
-import { batchMint } from "../core/mint.js";
+import { 
+  batchMint, 
+  getUserMintQuantity, 
+  setUserMintQuantity 
+} from "../core/mint.js";
 import { 
   fetchWalletPortfolio, 
   executeSell 
@@ -28,7 +32,6 @@ import { fundSubWallets } from "../core/funder.js";
 import { getEthUsdPrice, usdToEth } from "../core/price.js";
 import { 
   checkGasSafety, 
-  getUserGasCeiling, 
   setUserGasCeiling 
 } from "../core/gasGuard.js";
 import {
@@ -51,6 +54,7 @@ import {
   fundAmountKeyboard,
   settingsMenuKeyboard,
   gasSettingsKeyboard,
+  quantitySettingsKeyboard,
 } from "./keyboards.js";
 
 interface SessionState {
@@ -105,6 +109,7 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
+• 🔢 Mint Multiplier — Set 1x to 10x mints per wallet per drop
 • ⛽ Gas Guard — Automatically blocks mints if Base L2 gas price surges
 • ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets
 • 🧹 Sweep Dust — Consolidate left-over ETH from sub-wallets back to Wallet 1
@@ -147,9 +152,40 @@ export async function handleCallback(ctx: Context) {
   if (data === "settings") {
     clearSession(telegramId);
     await ctx.editMessageText(
-      `🛡 **Bot Settings & Safety Controls**\n\nConfigure gas safety limits and bot preferences:`,
+      `🛡 **Bot Settings & Controls**\n\nConfigure quantity multipliers, gas limits, and preferences:`,
       {
         reply_markup: settingsMenuKeyboard(),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Multiplier menu
+  if (data === "menu_mint_qty") {
+    clearSession(telegramId);
+    const currentQty = getUserMintQuantity(telegramId);
+    await ctx.editMessageText(
+      `🔢 **Mint Multiplier (Per Wallet)**\n\n` +
+      `Current Setting: **${currentQty}x per wallet**\n\n` +
+      `When a new free drop arrives, each active wallet will attempt to mint this many times.\n\n` +
+      `Select your preferred multiplier:`,
+      {
+        reply_markup: quantitySettingsKeyboard(currentQty),
+        parse_mode: "Markdown",
+      }
+    );
+    return;
+  }
+
+  // Set multiplier value
+  if (data.startsWith("setqty_")) {
+    const qty = parseInt(data.slice(7), 10);
+    setUserMintQuantity(telegramId, qty);
+    await ctx.editMessageText(
+      `✅ Mint multiplier updated to **${qty}x per wallet**!`,
+      {
+        reply_markup: quantitySettingsKeyboard(qty),
         parse_mode: "Markdown",
       }
     );
@@ -164,8 +200,8 @@ export async function handleCallback(ctx: Context) {
       `⛽ **Gas Price Ceiling Guard**\n\n` +
       `Current Base Gas Price: \`${gasCheck.currentGwei.toFixed(4)} Gwei\`\n` +
       `Your Configured Ceiling: \`${gasCheck.maxGwei} Gwei\`\n\n` +
-      `If the network gas exceeds your limit, automatic and batch mints will safely abort to avoid high fees.\n\n` +
-      `Select your preferred maximum gas ceiling:`,
+      `If the network gas exceeds your limit, mints will safely abort to avoid high fees.\n\n` +
+      `Select your maximum gas ceiling:`,
       {
         reply_markup: gasSettingsKeyboard(gasCheck.maxGwei),
         parse_mode: "Markdown",
@@ -895,7 +931,6 @@ async function performScan(ctx: Context, telegramId: bigint, address: string) {
 }
 
 async function performMint(ctx: Context, telegramId: bigint, address: string) {
-  // Gas safety check before dispatching mint
   const gasCheck = await checkGasSafety(telegramId);
   if (!gasCheck.safe) {
     await ctx.reply(
@@ -922,8 +957,14 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
     return;
   }
 
+  const multiplier = getUserMintQuantity(telegramId);
+
   await ctx.reply(
-    `🚀 **Starting Mint**\n\nContract: \`${shortenAddress(address)}\`\nActive Wallets: ${activeCount}\nGas Price: \`${gasCheck.currentGwei.toFixed(4)} Gwei\` (Safe ✅)\n\nMinting in progress...`,
+    `🚀 **Starting Mint**\n\n` +
+    `Contract: \`${shortenAddress(address)}\`\n` +
+    `Active Wallets: ${activeCount} (x${multiplier} each)\n` +
+    `Gas Price: \`${gasCheck.currentGwei.toFixed(4)} Gwei\` (Safe ✅)\n\n` +
+    `Minting in progress...`,
     { parse_mode: "Markdown" }
   );
 
@@ -957,7 +998,7 @@ async function performMint(ctx: Context, telegramId: bigint, address: string) {
     }
 
     await ctx.reply(
-      `📊 **Mint Summary**\n\nContract: \`${shortenAddress(address)}\`\n✅ Success: ${result.totalSuccess}\n❌ Failed: ${result.totalFailed}\nTotal: ${result.results.length}`,
+      `📊 **Mint Summary**\n\nContract: \`${shortenAddress(address)}\`\n✅ Success: ${result.totalSuccess}\n❌ Failed: ${result.totalFailed}\nTotal Attempts: ${result.results.length}`,
       {
         reply_markup: backToMainKeyboard(),
         parse_mode: "Markdown",
