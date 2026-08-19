@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/main.js",
+    "build": "tsc && prisma generate",
+    "start": "prisma db push && node dist/main.js",
     "dev": "tsx src/main.ts",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
@@ -16,12 +16,12 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "grammy": "^1.32.0",
+    "prisma": "^5.22.0",
     "viem": "^2.21.55"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
-    "prisma": "^5.22.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }
