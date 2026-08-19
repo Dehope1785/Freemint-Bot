@@ -8,9 +8,15 @@ export function mainMenuKeyboard(autoMintEnabled: boolean): InlineKeyboard {
 
   return new InlineKeyboard()
     .text("💼 My Wallets", "wallets").text("➕ New Wallet", "new_wallet").row()
-    .text("🔍 Scan Contract", "scan_contract").text("👁 Watchlist", "watchlist").row()
-    .text(toggleText, toggleData).text("🚀 Manual Mint", "manual_mint").row()
-    .text("🛡 Settings / Help", "settings");
+    .text("🖼 My Portfolio", "portfolio").text("🔍 Scan Contract", "scan_contract").row()
+    .text("👁 Watchlist", "watchlist").text("🚀 Manual Mint", "manual_mint").row()
+    .text(toggleText, toggleData).text("🛡 Settings / Help", "settings");
+}
+
+export function portfolioKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🔄 Refresh Portfolio", "portfolio").row()
+    .text("🏠 Main Menu", "main_menu");
 }
 
 export function walletsKeyboard(wallets: WalletInfo[]): InlineKeyboard {
@@ -114,11 +120,7 @@ export function watchlistKeyboard(contracts: string[]): InlineKeyboard {
     kb.row();
   }
 
-  if (contracts.length === 0) {
-    kb.text("🏠 Main Menu", "main_menu");
-  } else {
-    kb.text("🏠 Main Menu", "main_menu");
-  }
+  kb.text("🏠 Main Menu", "main_menu");
 
   return kb;
 }
