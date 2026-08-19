@@ -109,6 +109,7 @@ export async function helpCommand(ctx: Context) {
 
 **Features:**
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
+• 🛡 Security Scanner — Automatic honeypot & drainer detection
 • 🔢 Mint Multiplier — Set 1x to 10x mints per wallet per drop
 • ⛽ Gas Guard — Automatically blocks mints if Base L2 gas price surges
 • ⛽ Refuel Gas — Distribute ETH from Wallet 1 to all sub-wallets
@@ -899,16 +900,26 @@ async function performScan(ctx: Context, telegramId: bigint, address: string) {
       return;
     }
 
-    let text = `🔍 **Scan Results**\n\n`;
+    let text = `🔍 **Contract Analysis & Security Audit**\n\n`;
     text += `Contract: \`${result.contractAddress}\`\n`;
-    text += `Verified: ${result.isVerified ? "✅ Yes" : "❌ No"}\n\n`;
+    text += `Verified: ${result.isVerified ? "✅ Yes" : "⚠️ Bytecode only"}\n`;
+    text += `🛡 **Security Status:** ${result.security.isSafe ? "✅ SAFE / CLEAN" : "🚨 HIGH RISK / HONEYPOT"}\n`;
+    text += `Risk Score: \`${result.security.riskScore} / 100\`\n\n`;
 
-    if (result.mintFunctions.length > 0) {
+    if (result.security.warnings.length > 0) {
+      text += `⚠️ **Security Warnings:**\n`;
+      for (const w of result.security.warnings) {
+        text += `• ${w}\n`;
+      }
+      text += `\n`;
+    }
+
+    if (result.mintFunctions.length > 0 && result.security.isSafe) {
       text += `**Free Mint Functions Found:**\n`;
       for (const fn of result.mintFunctions) {
         text += `• ${fn.name}(${fn.args.join(", ")}) — ✅ Free\n`;
       }
-      text += `\n🚀 This contract has free mint functions!`;
+      text += `\n🚀 Safe free mint confirmed!`;
 
       await addToWatchlist(telegramId, address);
 
