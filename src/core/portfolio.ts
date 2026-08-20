@@ -24,7 +24,7 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
   let totalFloorValueEth = 0;
 
   try {
-    const res = await fetch(`https://api-base.reservoir.tools/users/${walletAddress}/tokens/v7?limit=20`, {
+    const res = await fetch(`https://api.reservoir.tools/users/${walletAddress}/tokens/v7?limit=20&chain=base`, {
       headers: {
         "Accept": "*/*",
         "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
