@@ -1,7 +1,4 @@
-import { type Hex, type Address } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { base } from "viem/chains";
-import { getPublicClient } from "./chain.js";
+import { type Hex } from "viem";
 
 export interface PortfolioItem {
   contractAddress: string;
@@ -24,16 +21,16 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
   let totalFloorValueEth = 0;
 
   try {
-    const res = await fetch(`https://api-base.reservoir.tools/users/${walletAddress}/tokens/v7?limit=20`, {
+    const res = await fetch(`https://api.reservoir.tools/users/${walletAddress}/tokens/v7?limit=50&chain=base`, {
       headers: {
         "Accept": "*/*",
         "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
       },
     });
 
-    if (res && res.ok) {
+    if (res.ok) {
       const data = (await res.json()) as any;
-      if (data && data.tokens && data.tokens.length > 0) {
+      if (data?.tokens?.length > 0) {
         for (const t of data.tokens) {
           const token = t.token;
           if (!token) continue;
@@ -58,9 +55,8 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
         }
       }
     }
-  } catch (err: any) {
-    // Gracefully catch DNS or network lookup drops without crashing the background worker
-    console.warn(`Portfolio sync notice for ${walletAddress}: Network/DNS lookup skipped temporarily.`);
+  } catch (err) {
+    console.error(`Portfolio fetch error for ${walletAddress}:`, err);
   }
 
   return {
