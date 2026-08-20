@@ -6,6 +6,7 @@ import { prisma } from "./db/client.js";
 import { BaseDropListener } from "./core/listener.js";
 import { scanContract } from "./core/scanner.js";
 import { startFloorWatcher } from "./core/floorWatcher.js";
+import { pollTrackedWalletsForUser } from "./core/sniperEngine.js";
 
 async function main() {
   console.log("🚀 Starting Base Auto-Mint Bot...");
@@ -39,6 +40,28 @@ async function main() {
 
   // 📈 Start Background Floor Price & Value Alert Watcher (every 5 mins)
   startFloorWatcher(bot, 300);
+
+  // 🎯 Background Copy-Mint Poller (runs every 12 seconds matching Base block time)
+  setInterval(async () => {
+    try {
+      const configs = await prisma.sniperConfig.findMany({
+        where: { autoCopy: true },
+      });
+
+      for (const cfg of configs) {
+        await pollTrackedWalletsForUser(cfg.userId, async (msg) => {
+          try {
+            const targetChatId = typeof cfg.userId === "bigint" ? Number(cfg.userId) : cfg.userId;
+            await bot.api.sendMessage(targetChatId, msg, { parse_mode: "Markdown" });
+          } catch (e) {
+            console.error("Failed to send copy-mint notification:", e);
+          }
+        });
+      }
+    } catch (err) {
+      console.error("Error in background copy-mint poller:", err);
+    }
+  }, 12000);
 
   // 📡 Real-Time Free-Mint Auto-Discovery Block Sniffer
   const dropListener = new BaseDropListener(async (drop) => {
