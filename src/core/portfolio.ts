@@ -1,8 +1,7 @@
-import { type Hex, parseAbi, type Address } from "viem";
+import { type Hex, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { getPublicClient } from "./chain.js";
-import { prisma } from "../db/client.js";
 
 export interface PortfolioItem {
   contractAddress: string;
@@ -22,72 +21,52 @@ export interface WalletPortfolio {
 
 export async function fetchWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
   const items: PortfolioItem[] = [];
-  const normalizedAddr = walletAddress.toLowerCase() as Address;
-  const publicClient = getPublicClient();
-  const seenContracts = new Set<string>();
+  let totalFloorValueEth = 0;
 
   try {
-    const history = await prisma.mintHistory.findMany({
-      where: { status: "SUCCESS", txHash: { not: null } },
-      orderBy: { timestamp: "desc" },
-      take: 50,
+    const res = await fetch(`https://api-base.reservoir.tools/users/${walletAddress}/tokens/v7?limit=20`, {
+      headers: {
+        "Accept": "*/*",
+        "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
+      },
     });
 
-    for (const h of history) {
-      if (h.contractAddress && !seenContracts.has(h.contractAddress.toLowerCase())) {
-        seenContracts.add(h.contractAddress.toLowerCase());
-      }
-    }
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      if (data && data.tokens && data.tokens.length > 0) {
+        for (const t of data.tokens) {
+          const token = t.token;
+          if (!token) continue;
 
-    for (const contractAddr of seenContracts) {
-      try {
-        const cAddr = contractAddr as Address;
+          const contractAddress = token.contract || "";
+          const tokenId = token.tokenId || "";
+          const collectionName = token.collection?.name || "Base NFT";
+          const floorPriceEth = token.collection?.floorAsk?.price?.amount?.native || 0;
+          const topBidEth = token.market?.topBid?.price?.amount?.native || 0;
+          const openseaUrl = `https://opensea.io/assets/base/${contractAddress}/${tokenId}`;
 
-        const balance = (await publicClient.readContract({
-          address: cAddr,
-          abi: parseAbi([
-            "function balanceOf(address owner) view returns (uint256)",
-            "function name() view returns (string)",
-          ]),
-          functionName: "balanceOf",
-          args: [normalizedAddr],
-        }).catch(() => 0n)) as bigint;
-
-        if (balance && balance > 0n) {
-          let collectionName = `Base NFT Collection`;
-          try {
-            const nameResult = (await publicClient.readContract({
-              address: cAddr,
-              abi: parseAbi(["function name() view returns (string)"]),
-              functionName: "name",
-            })) as string;
-            if (nameResult) collectionName = nameResult;
-          } catch {
-            // Fallback name
-          }
+          totalFloorValueEth += floorPriceEth;
 
           items.push({
-            contractAddress: cAddr,
-            tokenId: `1+ (${balance.toString()} total)`,
-            collectionName: `${collectionName}`,
-            floorPriceEth: 0,
-            topBidEth: 0,
-            openseaUrl: `https://opensea.io/assets/base/${cAddr}`,
+            contractAddress,
+            tokenId,
+            collectionName,
+            floorPriceEth,
+            topBidEth,
+            openseaUrl,
           });
         }
-      } catch {
-        // Skip incompatible contracts
       }
     }
   } catch (err) {
-    console.error("On-chain portfolio check error:", err);
+    console.error(`Error fetching portfolio for wallet ${walletAddress}:`, err);
   }
 
   return {
     walletAddress,
     items,
     totalNfts: items.length,
-    totalFloorValueEth: 0,
+    totalFloorValueEth,
   };
 }
 
