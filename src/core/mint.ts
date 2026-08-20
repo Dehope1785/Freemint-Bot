@@ -60,7 +60,17 @@ export async function executeMintForWallet(
       `function ${mintFunction.name}(${mintFunction.args.join(",")})`,
     ] as const);
 
-    const args: unknown[] = mintFunction.args.length === 1 ? [1n] : [];
+    // Intelligent argument construction based on parameter types
+    const args: unknown[] = [];
+    for (const argType of mintFunction.args) {
+      if (argType.includes("address")) {
+        args.push(walletAddress as Address);
+      } else if (argType.includes("uint") || argType.includes("int")) {
+        args.push(BigInt(iteration));
+      } else {
+        args.push(1n);
+      }
+    }
 
     const simResult = await simulateMint(contractAddress, walletAddress, mintFunction);
     if (!simResult.success) {
