@@ -1,6 +1,7 @@
-import { type Address } from "viem";
+import { type Address, type Hex } from "viem";
 import { getPublicClient } from "./chain.js";
 import { prisma } from "../db/client.js";
+import { batchMint } from "./mint.js";
 
 export async function addTrackedWallet(telegramId: bigint, address: string, label?: string) {
   return await prisma.trackedWallet.upsert({
@@ -44,26 +45,47 @@ export async function setSniperConfig(telegramId: bigint, autoCopy: boolean, max
   });
 }
 
-// Background checker function to monitor tracked wallets on Base
-export async function checkTrackedWalletsActivity(telegramId: bigint) {
+// Live background activity poller to copy-mint tracked whale actions on Base
+export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallback: (msg: string) => void) {
+  const config = await getSniperConfig(telegramId);
+  if (!config.autoCopy) return;
+
   const tracked = await getTrackedWallets(telegramId);
-  if (tracked.length === 0) return [];
+  if (tracked.length === 0) return;
 
   const publicClient = getPublicClient();
-  const alerts: Array<{ address: string; label: string | null; message: string }> = [];
 
   for (const tw of tracked) {
     try {
-      // Verify smart contract / account status on Base
-      const code = await publicClient.getBytecode({ address: tw.address as Address });
-      if (code) {
-        // Tracked address is active on-chain
-        // You can extend this to check recent logs/transactions using publicClient.getLogs()
+      // Get the latest block number on Base
+      const blockNumber = await publicClient.getBlockNumber();
+      const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
+
+      if (!block || !block.transactions) continue;
+
+      for (const tx of block.transactions) {
+        if (typeof tx === "object" && tx.from && tx.from.toLowerCase() === tw.address.toLowerCase()) {
+          // Whale interacted with a contract! Check if it looks like a mint call (data length > 10)
+          if (tx.to && tx.input && tx.input !== "0x" && tx.input.length > 10) {
+            const valueEth = Number(tx.value || 0n) / 1e18;
+
+            // Enforce user max spend filter
+            if (valueEth <= config.maxSpendEth) {
+              notifyCallback(
+                `🎯 **Whale Alert (${tw.label || "Tracked"})!**\n` +
+                `Detected interaction with contract: \`${tx.to}\`\n` +
+                `Value: \`${valueEth} ETH\`\n\n` +
+                `🚀 Automatically triggering copy-mint across your active sub-wallets...`
+              );
+
+              // Execute the batch mint mirroring the contract
+              await batchMint(telegramId, tx.to);
+            }
+          }
+        }
       }
     } catch (err) {
-      console.error(`Error checking tracked wallet ${tw.address}:`, err);
+      console.error(`Error polling tracked wallet ${tw.address}:`, err);
     }
   }
-
-  return alerts;
 }
