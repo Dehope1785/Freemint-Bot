@@ -45,6 +45,9 @@ export async function setSniperConfig(telegramId: bigint, autoCopy: boolean, max
   });
 }
 
+// Keep track of the last scanned block per user to avoid skipping blocks
+const lastScannedBlocks = new Map<string, bigint>();
+
 // Live background activity poller to copy-mint tracked whale actions on Base
 export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallback: (msg: string) => void) {
   const config = await getSniperConfig(telegramId);
@@ -55,37 +58,52 @@ export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallba
 
   const publicClient = getPublicClient();
 
-  for (const tw of tracked) {
-    try {
-      // Get the latest block number on Base
-      const blockNumber = await publicClient.getBlockNumber();
-      const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
+  try {
+    const currentBlockNumber = await publicClient.getBlockNumber();
+    const userKey = telegramId.toString();
+    
+    let lastBlock = lastScannedBlocks.get(userKey);
+    if (!lastBlock) {
+      // Initialize to current block minus 1 if first run
+      lastBlock = currentBlockNumber - 1n;
+    }
 
-      if (!block || !block.transactions) continue;
+    // If new blocks have been minted, scan them sequentially
+    if (currentBlockNumber > lastBlock) {
+      for (let bNum = lastBlock + 1n; bNum <= currentBlockNumber; bNum++) {
+        const block = await publicClient.getBlock({ blockNumber: bNum, includeTransactions: true });
+        if (!block || !block.transactions) continue;
 
-      for (const tx of block.transactions) {
-        if (typeof tx === "object" && tx.from && tx.from.toLowerCase() === tw.address.toLowerCase()) {
-          // Whale interacted with a contract! Check if it looks like a mint call (data length > 10)
-          if (tx.to && tx.input && tx.input !== "0x" && tx.input.length > 10) {
-            const valueEth = Number(tx.value || 0n) / 1e18;
+        for (const tx of block.transactions) {
+          if (typeof tx === "object" && tx.from) {
+            const sender = tx.from.toLowerCase();
+            const matchedWallet = tracked.find(tw => tw.address.toLowerCase() === sender);
 
-            // Enforce user max spend filter
-            if (valueEth <= config.maxSpendEth) {
-              notifyCallback(
-                `🎯 **Whale Alert (${tw.label || "Tracked"})!**\n` +
-                `Detected interaction with contract: \`${tx.to}\`\n` +
-                `Value: \`${valueEth} ETH\`\n\n` +
-                `🚀 Automatically triggering copy-mint across your active sub-wallets...`
-              );
+            if (matchedWallet) {
+              // Whale made a transaction!
+              if (tx.to && tx.input && tx.input !== "0x" && tx.input.length > 10) {
+                const valueEth = Number(tx.value || 0n) / 1e18;
 
-              // Execute the batch mint mirroring the contract
-              await batchMint(telegramId, tx.to);
+                // Enforce user max spend filter (e.g. 0 for strict free mints)
+                if (valueEth <= config.maxSpendEth) {
+                  notifyCallback(
+                    `🎯 **Whale Alert (${matchedWallet.label || "Tracked"})!**\n` +
+                    `Detected interaction with contract: \`${tx.to}\`\n` +
+                    `Value: \`${valueEth} ETH\`\n\n` +
+                    `🚀 Automatically triggering copy-mint across your active sub-wallets...`
+                  );
+
+                  // Execute the batch mint mirroring the contract
+                  await batchMint(telegramId, tx.to);
+                }
+              }
             }
           }
         }
       }
-    } catch (err) {
-      console.error(`Error polling tracked wallet ${tw.address}:`, err);
+      lastScannedBlocks.set(userKey, currentBlockNumber);
     }
+  } catch (err) {
+    console.error(`Error polling tracked wallets for user ${telegramId}:`, err);
   }
 }
