@@ -7,11 +7,11 @@ export interface CollectionBid {
 
 export async function checkCollectionBids(contractAddress: string): Promise<CollectionBid[]> {
   const bids: CollectionBid[] = [];
+
   try {
-    const res = await fetch(`https://api.reservoir.tools/orders/bids/v6?collection=${contractAddress}&status=active&limit=5`, {
+    const res = await fetch(`https://api-base.reservoir.tools/orders/bids/v6?collection=${contractAddress}&status=active&limit=5`, {
       headers: {
         "Accept": "*/*",
-        "x-api-key": process.env.RESERVOIR_API_KEY || "demo-api-key",
       },
     });
 
