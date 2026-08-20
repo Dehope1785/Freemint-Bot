@@ -45,10 +45,9 @@ export async function setSniperConfig(telegramId: bigint, autoCopy: boolean, max
   });
 }
 
-// Keep track of the last scanned block per user to avoid skipping blocks
 const lastScannedBlocks = new Map<string, bigint>();
 
-// Live background activity poller to copy-mint tracked whale actions on Base
+// Upgraded High-Performance Poller matching whale actions & router/mint interactions
 export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallback: (msg: string) => void) {
   const config = await getSniperConfig(telegramId);
   if (!config.autoCopy) return;
@@ -64,11 +63,9 @@ export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallba
     
     let lastBlock = lastScannedBlocks.get(userKey);
     if (!lastBlock) {
-      // Initialize to current block minus 1 if first run
       lastBlock = currentBlockNumber - 1n;
     }
 
-    // If new blocks have been minted, scan them sequentially
     if (currentBlockNumber > lastBlock) {
       for (let bNum = lastBlock + 1n; bNum <= currentBlockNumber; bNum++) {
         const block = await publicClient.getBlock({ blockNumber: bNum, includeTransactions: true });
@@ -80,21 +77,27 @@ export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallba
             const matchedWallet = tracked.find(tw => tw.address.toLowerCase() === sender);
 
             if (matchedWallet) {
-              // Whale made a transaction!
+              // Check if transaction has payload data indicating mint or contract interaction
               if (tx.to && tx.input && tx.input !== "0x" && tx.input.length > 10) {
                 const valueEth = Number(tx.value || 0n) / 1e18;
 
-                // Enforce user max spend filter (e.g. 0 for strict free mints)
                 if (valueEth <= config.maxSpendEth) {
                   notifyCallback(
-                    `🎯 **Whale Alert (${matchedWallet.label || "Tracked"})!**\n` +
-                    `Detected interaction with contract: \`${tx.to}\`\n` +
-                    `Value: \`${valueEth} ETH\`\n\n` +
-                    `🚀 Automatically triggering copy-mint across your active sub-wallets...`
+                    `🎯 **WHALE COPY-MINT ALERT (${matchedWallet.label || "Tracked"})!**\n` +
+                    `Target Contract: \`${tx.to}\`\n` +
+                    `Value: \`${valueEth} ETH\`\n` +
+                    `TxHash: \`${tx.hash}\`\n\n` +
+                    `🚀 Automatically executing copy-mint across your sub-wallets...`
                   );
 
-                  // Execute the batch mint mirroring the contract
+                  // Execute batch mint with real-time tracking
                   await batchMint(telegramId, tx.to);
+                } else {
+                  notifyCallback(
+                    `⏭️ **Skipped Copy-Mint (${matchedWallet.label || "Tracked"})**\n` +
+                    `Cost: ~${valueEth} ETH exceeds your Max Spend setting ($0).\n` +
+                    `TxHash: \`${tx.hash}\``
+                  );
                 }
               }
             }
@@ -104,6 +107,6 @@ export async function pollTrackedWalletsForUser(telegramId: bigint, notifyCallba
       lastScannedBlocks.set(userKey, currentBlockNumber);
     }
   } catch (err) {
-    console.error(`Error polling tracked wallets for user ${telegramId}:`, err);
+    console.error(`Error in sniper polling for user ${telegramId}:`, err);
   }
 }
