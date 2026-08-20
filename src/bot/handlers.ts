@@ -26,6 +26,10 @@ import {
   fetchWalletPortfolio, 
   executeSell 
 } from "../core/portfolio.js";
+import { 
+  fetchCollectionFloor, 
+  executeAutoListing 
+} from "../core/autoLister.js";
 import { sweepDustToMaster } from "../core/sweeper.js";
 import { sweepAllNFTsToMaster } from "../core/nftSweeper.js";
 import { fundSubWallets } from "../core/funder.js";
@@ -127,6 +131,7 @@ export async function helpCommand(ctx: Context) {
 • 💼 Manage multiple wallets (generate, import, toggle, delete)
 • 🎯 Whale Tracking & Copy-Mint — Mirror trades and mints from tracked addresses
 • 💰 Auto-Sell — Automatically fills open bids when targets are reached
+• 🏷 Auto-Listing — List NFTs instantly at live secondary market floor prices
 • 🛡 Security Scanner — Automatic honeypot & drainer detection
 • 🔢 Mint Multiplier — Set 1x to 10x mints per wallet per drop
 • ⛽ Gas Guard — Automatically blocks mints if Base L2 gas surges
@@ -509,6 +514,43 @@ export async function handleCallback(ctx: Context) {
       }
     } catch (err) {
       await ctx.reply(`❌ Sell execution failed: ${errorMessage(err)}`);
+    }
+    return;
+  }
+
+  // Instant marketplace listing execution
+  if (data.startsWith("list_")) {
+    const parts = data.split("_");
+    const contractAddr = parts[1];
+    const tokenId = parts[2];
+    const walletId = parts[3];
+
+    await ctx.reply(`🏷 Fetching floor price & building marketplace listing for token #${tokenId}...`);
+
+    try {
+      const floorData = await fetchCollectionFloor(contractAddr);
+      if (floorData.floorPriceEth <= 0) {
+        await ctx.reply(`❌ Cannot list item: No active floor price found on secondary markets yet.`);
+        return;
+      }
+
+      const privateKey = await getWalletPrivateKey(walletId);
+      const hexKey = (privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`) as Hex;
+
+      const result = await executeAutoListing(hexKey, contractAddr, tokenId, floorData.floorPriceEth);
+
+      if (result.success) {
+        await ctx.reply(
+          `🎉 **NFT LISTED SUCCESSFULLY ON MARKETPLACE!**\n\n` +
+          `🏷 List Price: \`${floorData.floorPriceEth} ETH\`\n` +
+          `🔗 [View BaseScan Receipt](https://basescan.org/tx/${result.txHash})`,
+          { parse_mode: "Markdown" }
+        );
+      } else {
+        await ctx.reply(`❌ Listing failed: ${result.error || "Unable to broadcast transaction"}`);
+      }
+    } catch (err) {
+      await ctx.reply(`❌ Listing execution failed: ${errorMessage(err)}`);
     }
     return;
   }
@@ -963,9 +1005,20 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
     const portfolio = await fetchWalletPortfolio(w.address);
     const shortAddr = shortenAddress(w.address);
 
+    let walletFloorEth = 0;
+    for (const item of portfolio.items) {
+      const floorData = await fetchCollectionFloor(item.contractAddress);
+      item.floorPriceEth = floorData.floorPriceEth;
+      item.topBidEth = floorData.topBidEth;
+      if (floorData.collectionName && floorData.collectionName !== "Base NFT Collection") {
+        item.collectionName = floorData.collectionName;
+      }
+      walletFloorEth += item.floorPriceEth;
+    }
+
     text += `👛 **${w.label}** (\`${shortAddr}\`):\n`;
     text += `📦 Holdings: ${portfolio.totalNfts} NFT(s)\n`;
-    text += `💎 Est. Floor Value: ${portfolio.totalFloorValueEth.toFixed(4)} ETH\n`;
+    text += `💎 Est. Floor Value: ${walletFloorEth.toFixed(4)} ETH\n`;
 
     if (portfolio.items.length > 0) {
       for (const item of portfolio.items.slice(0, 3)) {
@@ -979,6 +1032,10 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
           { 
             text: `💰 Liquidate #${item.tokenId} (${item.topBidEth > 0 ? `${item.topBidEth} ETH` : "Dump"})`, 
             callback_data: `sell_${item.contractAddress}_${item.tokenId}_${w.id}` 
+          },
+          {
+            text: `🏷 List at Floor`,
+            callback_data: `list_${item.contractAddress}_${item.tokenId}_${w.id}`
           }
         ]);
       }
@@ -987,7 +1044,7 @@ async function showPortfolioScreen(ctx: Context, telegramId: bigint) {
     }
     text += `\n`;
 
-    combinedFloorEth += portfolio.totalFloorValueEth;
+    combinedFloorEth += walletFloorEth;
     totalNftsHeld += portfolio.totalNfts;
   }
 
