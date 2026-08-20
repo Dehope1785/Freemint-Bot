@@ -1,4 +1,4 @@
-import { type Hex, createPublicClient, http } from "viem";
+import { type Hex, createPublicClient, http, parseAbi } from "viem";
 import { base } from "viem/chains";
 
 export interface PortfolioItem {
@@ -22,51 +22,59 @@ const client = createPublicClient({
   transport: http(process.env.BASE_RPC_URL || "https://mainnet.base.org"),
 });
 
+// Standard ERC-721 ABI for querying token holdings
+const ERC721_ABI = parseAbi([
+  "function balanceOf(address owner) view returns (uint256)",
+  "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)"
+]);
+
 export async function fetchWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
   const items: PortfolioItem[] = [];
   
   try {
-    // Using BaseScan public API to fetch ERC721/ERC1155 token holdings reliably without DNS errors
-    const url = `https://api.basescan.org/api?module=account&action=tokennfttx&address=${walletAddress}&apikey=YourApiKeyToken`;
-    const res = await fetch(url);
-    
-    if (res.ok) {
-      const data = (await res.json()) as any;
-      if (data?.status === "1" && Array.isArray(data.result)) {
-        // Track unique tokens currently held
-        const heldTokens = new Map<string, { contract: string; tokenId: string }>();
-        
-        for (const tx of data.result) {
-          const contract = tx.contractAddress?.toLowerCase();
-          const tokenId = tx.tokenID;
-          const to = tx.to?.toLowerCase();
-          const from = tx.from?.toLowerCase();
-          const target = walletAddress.toLowerCase();
+    // Primary: Try BaseScan API using your env variable key
+    const apiKey = process.env.BASESCAN_API_KEY;
+    if (apiKey) {
+      const url = `https://api.basescan.org/api?module=account&action=tokennfttx&address=${walletAddress}&apikey=${apiKey}`;
+      const res = await fetch(url);
+      
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        if (data?.status === "1" && Array.isArray(data.result)) {
+          const heldTokens = new Map<string, { contract: string; tokenId: string }>();
           
-          if (!contract || !tokenId) continue;
-          const key = `${contract}-${tokenId}`;
-          
-          if (to === target) {
-            heldTokens.set(key, { contract, tokenId });
-          } else if (from === target) {
-            heldTokens.delete(key);
+          for (const tx of data.result) {
+            const contract = tx.contractAddress?.toLowerCase();
+            const tokenId = tx.tokenID;
+            const to = tx.to?.toLowerCase();
+            const from = tx.from?.toLowerCase();
+            const target = walletAddress.toLowerCase();
+            
+            if (!contract || !tokenId) continue;
+            const key = `${contract}-${tokenId}`;
+            
+            if (to === target) {
+              heldTokens.set(key, { contract, tokenId });
+            } else if (from === target) {
+              heldTokens.delete(key);
+            }
           }
-        }
 
-        for (const [_, token] of heldTokens) {
-          items.push({
-            contractAddress: token.contract,
-            tokenId: token.tokenId,
-            collectionName: "Base On-Chain NFT",
-            floorPriceEth: 0.0042, // Default fallback floor matching your items
-            topBidEth: 0,
-            openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
-          });
+          for (const [_, token] of heldTokens) {
+            items.push({
+              contractAddress: token.contract,
+              tokenId: token.tokenId,
+              collectionName: "Base On-Chain NFT",
+              floorPriceEth: 0.0042,
+              topBidEth: 0,
+              openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
+            });
+          }
         }
       }
     }
   } catch (err) {
-    console.error(`On-chain portfolio fetch error for ${walletAddress}:`, err);
+    console.error(`Portfolio fetch fallback error for ${walletAddress}:`, err);
   }
 
   return {
