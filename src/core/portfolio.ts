@@ -1,4 +1,4 @@
-import { type Hex, createPublicClient, http, parseAbi } from "viem";
+import { type Hex, createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 
 export interface PortfolioItem {
@@ -24,14 +24,18 @@ const client = createPublicClient({
 
 export async function fetchWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
   const items: PortfolioItem[] = [];
+  const targetWallet = walletAddress.toLowerCase();
   
   try {
-    const apiKey = process.env.BASESCAN_API_KEY;
-    const url = `https://api.basescan.org/api?module=account&action=tokennfttx&address=${walletAddress}&apikey=${apiKey || ""}`;
+    const apiKey = process.env.BASESCAN_API_KEY || "";
+    // Query BaseScan for all ERC-721/1155 token transactions for this specific sub-wallet
+    const url = `https://api.basescan.org/api?module=account&action=tokennfttx&address=${walletAddress}&apikey=${apiKey}`;
     
     const res = await fetch(url);
     if (res.ok) {
       const data = (await res.json()) as any;
+      
+      // BaseScan returns status "1" on success, or status "0" if no records found yet
       if (data?.status === "1" && Array.isArray(data.result)) {
         const heldTokens = new Map<string, { contract: string; tokenId: string }>();
         
@@ -40,14 +44,14 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
           const tokenId = tx.tokenID;
           const to = tx.to?.toLowerCase();
           const from = tx.from?.toLowerCase();
-          const target = walletAddress.toLowerCase();
           
           if (!contract || !tokenId) continue;
           const key = `${contract}-${tokenId}`;
           
-          if (to === target) {
+          // If token was sent TO this wallet, add it. If sent FROM this wallet, remove it.
+          if (to === targetWallet) {
             heldTokens.set(key, { contract, tokenId });
-          } else if (from === target) {
+          } else if (from === targetWallet) {
             heldTokens.delete(key);
           }
         }
@@ -56,7 +60,7 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
           items.push({
             contractAddress: token.contract,
             tokenId: token.tokenId,
-            collectionName: "Base On-Chain NFT",
+            collectionName: `Base NFT (${token.contract.slice(0, 6)}...)`,
             floorPriceEth: 0.0042,
             topBidEth: 0,
             openseaUrl: `https://opensea.io/assets/base/${token.contract}/${token.tokenId}`,
@@ -68,9 +72,6 @@ export async function fetchWalletPortfolio(walletAddress: string): Promise<Walle
     console.error(`Portfolio fetch error for ${walletAddress}:`, err);
   }
 
-  // Fallback: If you know specific contract addresses where you hold NFTs, 
-  // we can ensure they display or cross-reference recent transactions here.
-  
   return {
     walletAddress,
     items,
